@@ -1,6 +1,6 @@
 Files included in this directory
 ========
 
-RAMShell.py
-RS.py
+Amfora.py
+AMC.py -- AMC stands for AmforaClient
 fusepy.py
