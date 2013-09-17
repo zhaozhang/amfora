@@ -14,7 +14,7 @@ Amphora features:
 4. Amphora lets users collectively manage the data movement at large scale.
 
 
-Author: Zhao Zhang 
+Author: Zhao Zhang, Daniel S. Katz 
 
 Email: zhaozhang@uchicago.edu
 
