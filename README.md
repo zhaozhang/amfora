@@ -1,17 +1,17 @@
 Amfora
 ======
 
-Amfora is a POSIX-compatible parallel scripting framework that lets users run exiting programs in parallel with RAM efficiency on distributed platforms: e.g. clouds, clusters, supercomputers. 
+Amfora is a POSIX-compatible parallel scripting framework that lets users run existing programs in parallel with RAM efficiency on distributed platforms: e.g. clouds, clusters, supercomputers. 
 
 Amphora features:
 
-1. Amphora lets the users select the scripting language as the programming interface. 
+1. Amphora lets the user select the scripting language they will use as the programming interface. 
 
 2. Amphora can execute LINUX command lines in parallel and cache the data in RAM. 
 
-3. Amphora provides a shared file system across the RAM on nodes. 
+3. Amphora provides a shared file system across the RAM on multiple nodes. 
 
-4. Amphora lets users collectively manage the data movement at large scale.
+4. Amphora lets users collectively manage data movement at large scale.
 
 
 Author: Zhao Zhang, Daniel S. Katz 
