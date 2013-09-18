@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.1
+#!/usr/bin/env python3
 ##!/home/zhaozhang/workplace/python/bin/python3.3
 import logging
 
@@ -3830,7 +3830,7 @@ if __name__ == '__main__':
         line = fd.readline()
         if not line:
             break
-        ip, port = line.strip('\n').split(' ')
+        ip, port = line.strip('\n').split(':')
         slist.append(ip)
     logger.log("INFO", "main", "Metadata Server List: "+str(slist))
     
