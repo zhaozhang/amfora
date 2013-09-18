@@ -4,14 +4,15 @@
 ### the pid is recorded on each host in a file, a kill runs
 ### Linux kill cmd with -9 option
 
-if [ $# -lt 1 ]; then
+if [ $# -lt 2 ]; then
     echo "wrong format"
-    echo "format: ${0} <amfora.conf>"
-    echo "example: ${0} etc/amfora.conf"
+    echo "format: ${0} <amfora.conf> <mountpoint>"
+    echo "example: ${0} etc/amfora.conf /tmp/amfora"
     exit
 fi
 
 file=${1}
+mount=${2}
 
 if [ "${AMFORA_HOME}" = "" ];then
     echo "Environment variable AMFORA_HOME is not defined"
@@ -23,7 +24,7 @@ do
     host=`echo ${line} | cut -d ':' -f 1`
     echo "killing amfora on ${host}"
     pid=`ssh ${host} "cd ${AMFORA_HOME};cat pid"`
-    ssh ${host} "kill -9 ${pid}"
+    ssh ${host} "kill -9 ${pid}; fusermount -u ${mount}"
 done
 
 
