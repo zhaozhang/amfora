@@ -5,29 +5,31 @@
 
 if [ $# -lt 1 ]; then
     echo "wrong format"
-    echo "format: ${0} <sites.list>"
-    echo "example: ${0} etc/sites.list"
+    echo "format: ${0} <amfora.conf>"
+    echo "example: ${0} etc/amfora.conf"
     exit
 fi
 
 file=${1}
-path=`echo ${AMFORA_HOME}`
-if [ "${path}" = "" ];then
+
+if [ "${AMFORA_HOME}" = "" ];then
     echo "Environment variable AMFORA_HOME is not defined"
     exit
 fi
 
-localhost=`hostname -i`
-grep -v '^\#' ${1} | while read host
+localhost=`hostname`
+localip=`nslookup ${localhost} | tail -n 2 | head -n 1 | cut -d ' ' -f 2`
+for line in `grep -v '^\#' ${1}` 
 do
-    if [ ${host} = ${localhost} ]; then
+    host=`echo ${line}| cut -d ':' -f 1`
+    port=`echo ${line}| cut -d ':' -f 2`
+    if [ ${host} = ${localip} ]; then
 	continue
     fi
-    echo ssh ${host} 'mkdir -p ${path}'
-    echo scp amfora.tar ${host}:${path}/
-    echo ssh ${host} 'cd ${path}; tar xf amfora.tar'
+    echo "deploying amfora on ${host}"
+    ssh ${host} "mkdir -p ${AMFORA_HOME}"
+    scp amfora.tar ${host}:${AMFORA_HOME}/
+    ssh ${host} "cd ${AMFORA_HOME}; tar xf amfora.tar"
 done
 
-#export AMFORA_HOME=${path}
-#export PATH=${PATH}:${AMFORA_HOME}/bin
 
