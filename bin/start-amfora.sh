@@ -23,7 +23,7 @@ for line in `grep -v '^\#' ${1}`
 do
     host=`echo ${line} | cut -d ':' -f 1`
     echo "starting amfora on ${host}"
-    ssh ${host} "cd ${AMFORA_HOME}; mkdir -p ${mount}; src/amfora.py ${mount} etc/amfora.conf ${host} >> /tmp/amfora.log 2>&1 &; echo $! > pid"
+    echo ssh ${host} "cd ${AMFORA_HOME}; bin/launch-amfora.sh ${mount} etc/amfora.conf ${host} ${AMFORA_HOME}"
 done
 
 
