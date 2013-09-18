@@ -15,6 +15,7 @@ fi
 mount=${1}
 file=${2}
 ip=${3}
+export AMFORA_HOME=${4}
 
 if [ "${AMFORA_HOME}" = "" ];then
     echo "Environment variable AMFORA_HOME is not defined"
