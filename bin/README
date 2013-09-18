@@ -1,5 +1,6 @@
 Files included in this directory
 ========
-
-start-Amfora.sh
-stop-Amfora.sh
+deploy-amfora.sh
+remove-amfora.sh
+start-amfora.sh
+stop-amfora.sh

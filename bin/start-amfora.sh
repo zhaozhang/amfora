@@ -1,6 +1,6 @@
 #!/bin/bash
 ### start-amfora.sh will start amfora on all hosts
-### listed in sites.list on the path of ${AMFORA_HOME}
+### listed in amfora.conf on the path of ${AMFORA_HOME}
 ### the shared file system is mounted as the second 
 ### parameter specifies
 

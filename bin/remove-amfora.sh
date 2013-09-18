@@ -1,7 +1,7 @@
 #!/bin/bash
-### deploy-amfora.sh will deploy amfora source code on all hosts
-### listed in amfora.conf on the path of ${AMFORA_HOME}
-###
+### remove-amfora.sh will remove amfora installation on all hosts
+### listed in amfora.conf on the path of ${AMFORA_HOME}, except
+### localhost
 
 if [ $# -lt 1 ]; then
     echo "wrong format"
@@ -26,10 +26,8 @@ do
     if [ ${host} = ${localip} ]; then
 	continue
     fi
-    echo "deploying amfora on ${host}"
-    ssh ${host} "mkdir -p ${AMFORA_HOME}"
-    scp amfora.tar ${host}:${AMFORA_HOME}/
-    ssh ${host} "cd ${AMFORA_HOME}; tar xf amfora.tar"
+    echo "removing amfora on ${host}"
+    ssh ${host} "rm -rf ${AMFORA_HOME}; unset AMFORA_HOME"
 done
 
 
