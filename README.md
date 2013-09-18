@@ -16,7 +16,7 @@ Amphora features:
 
 Author: Zhao Zhang, Daniel S. Katz 
 
-Email: zhaozhang@uchicago.edu
+Email: zhaozhang@uchicago.edu， dsk@ci.uchicago.edu
 
 Project Website: https://github.com/zhaozhang/amfora/wiki
 
