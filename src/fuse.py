@@ -64,7 +64,7 @@ if _system == 'Darwin':
                      find_library('fuse'))
 else:
     _libfuse_path = find_library('fuse')
-_libfuse_path = "/fuse/lib/libfuse.so.2.8.5"
+#_libfuse_path = "/fuse/lib/libfuse.so.2.8.5"
 if not _libfuse_path:
     raise EnvironmentError('Unable to find libfuse')
 else:
