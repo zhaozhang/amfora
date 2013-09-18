@@ -22,7 +22,8 @@ for line in `grep -v '^\#' ${1}`
 do
     host=`echo ${line} | cut -d ':' -f 1`
     echo "killing amfora on ${host}"
-    ssh ${host} "cd ${AMFORA_HOME};kill -9 `cat pid`"
+    pid=`ssh ${host} "cd ${AMFORA_HOME};cat pid"`
+    ssh ${host} "kill -9 ${pid}"
 done
 
 
