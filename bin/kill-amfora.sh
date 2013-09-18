@@ -21,8 +21,8 @@ fi
 for line in `grep -v '^\#' ${1}` 
 do
     host=`echo ${line} | cut -d ':' -f 1`
-    echo "starting amfora on ${host}"
-    ssh ${host} "cd ${AMFORA_HOME};pid=`cat pid`;kill -9 ${pid}"
+    echo "killing amfora on ${host}"
+    ssh ${host} "cd ${AMFORA_HOME};kill -9 `cat pid`"
 done
 
 
