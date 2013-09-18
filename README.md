@@ -18,7 +18,7 @@ Author: Zhao Zhang, Daniel S. Katz
 
 Email: zhaozhang@uchicago.edu
 
-Project Website: coming soon
+Project Website: https://github.com/zhaozhang/amfora/wiki
 
 Project Hosting Page: https://github.com/zhaozhang/amphora
 
