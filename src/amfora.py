@@ -73,174 +73,49 @@ class RAMdisk(LoggingMixIn, Operations):
     def chmod(self, path, mode):
         global logger
         logger.log("INFO", "chmod", path+", "+str(mode))
-        tcpclient = TCPclient()
-        ret=tcpclient.sendmsg(path, "CHMOD#"+str(mode))
-        return 0
 
     def chown(self, path, uid, gid):
         global logger
         logger.log("INFO", "chown", path+", "+str(uid)+", "+str(gid))
-        tcpclient = TCPclient()
-        ret=tcpclient.sendmsg(path, "CHOWN#"+str(uid)+"#"+str(gid))
 
     def create(self, path, mode):
         global logger
-        global localip
         logger.log("INFO", "create", path+", "+str(mode))
-        self.wmeta[path] = dict(st_mode=(S_IFREG | mode), st_nlink=1,
-                                st_size=0, st_ctime=time(), st_mtime=time(),
-                                st_atime=time(), location=localip)
-        md5=hashlib.md5()
-        md5.update(path.encode())
-        key = md5.hexdigest()
-        self.wcache[key] = b''
-        self.fd += 1
-        return self.fd
 
     def getattr(self, path, fh=None):
         global logger
         logger.log("INFO", "getattr", path)
-        if path in self.wmeta:
-            logger.log("INFO", "getattr", " wmeta cache hit")
-            return self.wmeta[path]
-        elif path in self.cache:
-            logger.log("INFO", "getattr", " cache hit")
-            return self.cache.pop(path)
-        elif path in self.files:
-            logger.log("INFO", "getattr", " files hit")
-            return self.files[path]
-        else:
-            global slist
-            global localip
-            md5=hashlib.md5()
-            md5.update(path.encode())
-            key = md5.hexdigest()
-            value = int(key, 16)
-            ip = slist[value%len(slist)]
-            if ip == localip:
-                raise FuseOSError(ENOENT)
-            logger.log("INFO", "getattr", " cache miss")
-            tcpclient = TCPclient()
-            data=tcpclient.sendmsg(path, "GETATTR")
-            ret = pickle.loads(data)
-            if not ret:
-                logger.log("INFO", "getattr", path+" is not on remote host")
-                self.create(path, 0o755)
-                raise FuseOSError(ENOENT)
-            else:
-                logger.log("INFO", "getattr", path+" is on remote host")
-                return ret
 
     def getxattr(self, path, name, position=0):
         global logger
         logger.log("INFO", "getxattr", path+", "+name)
-        #retrieve metadata from remote server 
-        if path in self.files:
-            attrs = self.files[path].get('attrs', {})
-            try:
-                return attrs[name]
-            except KeyError:
-                return b''
-        elif path in self.wmeta:
-            attrs = self.wmeta[path].get('attrs', {})
-            try:
-                return attrs[name]
-            except KeyError:
-                return b''
-        else:
-            tcpclient = TCPclient()
-            data=tcpclient.sendmsg(path, "GETXATTR")
-            attrs = pickle.loads(data)
-        
-            try:
-                return attrs[name]
-            except KeyError:
-                return b''       # Should return ENOATTR
+        #if empty return b''
 
     def listxattr(self, path):
         global logger
         logger.log("INFO", "listxattr", path)
-        if path in self.files:
-            attrs = self.files[name].get('attrs', {})
-            return attrs.keys()
-        elif path in self.wmeta:
-            attrs = self.wmeta[name].get('attrs', {})
-            return attrs.keys()
-        else:
-            #retrieve metadata from remote server
-            tcpclient = TCPclient()
-            data=tcpclient.sendmsg(path, "GETXATTR")
-            attrs = pickle.loads(data)
-            return attrs.keys()
 
     def mkdir(self, path, mode):
         global logger
         logger.log("INFO", "mkdir", path+", "+str(mode))
-        global slist
-        alltcpclient = ALLTCPclient()
-        data = alltcpclient.sendall(path, "MKDIR#"+str(mode), slist)
-        global ramdisk
-        ramdisk.local_mkdir(path, mode)
 
     def open(self, path, flags):
         global logger
         logger.log("INFO", "open", path+", "+str(flags))
-        self.fd += 1
-        return self.fd
 
     def read(self, path, size, offset, fh):
         global logger
         logger.log("INFO", "read", path+", "+str(size)+", "+str(offset))
-        md5=hashlib.md5()
-        md5.update(path.encode())
-        key = md5.hexdigest()
-        #retrieve data from remote server
-        if key in self.wcache:
-            return self.wcache[key][offset:offset + size]
-        if key not in self.data:
-            tcpclient = TCPclient()
-            data = tcpclient.sendmsg(path, "READ")
-            meta = pickle.loads(data)
-            location = meta['location']
-            dsize = meta['st_size']
-            ret = tcpclient.retrievefile(key, "COPY", location, dsize)
-            self.data[key] = ret
-        return self.data[key][offset:offset + size]
 
     def readdir(self, path, fh):
         global logger
         logger.log("INFO", "readdir", path)
-        global slist
-        ilist = ['.', '..']
-        alltcpclient = ALLTCPclient()
-        metadict=alltcpclient.sendall(path, "READDIR", slist)
-        self.cache.update(metadict)
+        pass
 
-        for x in metadict.keys():
-            iname = os.path.basename(x)
-            ilist.append(iname)
-        for x in self.files:
-            if x != '/' and path == os.path.dirname(x):
-                iname=x[len(path):]
-                if iname[0] == '/':
-                    iname = iname[1:]
-                if iname not in ilist:
-                    ilist.append(iname)
-                self.cache[x] = self.files[x]
-        #update location list
-        for x in self.cache.keys():
-            if self.cache[x]['location'] not in self.files[path]['location']:
-                self.files[path]['location'].append(self.cache[x]['location'])
-        #print("readdir: ilist:"+str(ilist))
-        return ilist
-        
     def readlink(self, path):
         global logger
         logger.log("INFO", "readlink", path)
-        tcpclient = TCPclient()
-        data = tcpclient.sendmsg(path, "READLINK#")
-        ret = data.decode("utf8")
-        return ret
+        pass
 
     def removexattr(self, path, name):
         #not implemented yet
@@ -254,29 +129,12 @@ class RAMdisk(LoggingMixIn, Operations):
     def rename(self, old, new):
         global logger
         logger.log("INFO", "rename", "old: "+old+", new: "+new)
- 
-        tcpclient = TCPclient()
-        if old not in self.files:
-            data = tcpclient.sendmsg(old, "READ")
-            meta = pickle.loads(data)
-        else:
-            meta = self.files[old]
-        if S_ISDIR(meta['st_mode']):
-            print("ERROR: renaming directory is not supported for the moment")
-        else:
-            location = meta['location']
-            ret = tcpclient.renamefile(old, new, location)
-            ret = tcpclient.insertmeta(new, meta)
-            ret = tcpclient.sendmsg(old, "UNLINK")
+        pass
 
     def rmdir(self, path):
         global logger
         logger.log("INFO", "rmdir", path)
-        global slist
-        alltcpclient = ALLTCPclient()
-        data = alltcpclient.sendall(path, "RMDIR", slist)
-        global ramdisk
-        ramdisk.local_rmdir(path)
+        pass
 
     def setxattr(self, path, name, value, options, position=0):
         # not implemented yet
@@ -289,217 +147,92 @@ class RAMdisk(LoggingMixIn, Operations):
 
     def symlink(self, target, source):
         global logger
-        global slist
         logger.log("INFO", "symlink", "target: "+target+", source:"+source)
-        md5=hashlib.md5()
-        md5.update(target.encode())
-        key = md5.hexdigest()
-        value = int(key, 16)
-        ip = slist[value%len(slist)]
-        if ip == localip:
-            local_symlink(target, source, ip)
-        else:    
-            tcpclient = TCPclient()
-            data=tcpclient.sendmsg(target, "SYMLINK#"+source)
+        pass
 
     def truncate(self, path, length, fh=None):
         global logger
         logger.log("INFO", "truncate", path+", "+str(length))
-        md5=hashlib.md5()
-        md5.update(path.encode())
-        key = md5.hexdigest()
-        self.data[key] = self.data[key][:length]
-        if path in self.files:
-            self.files[path]['st_size'] = length
-        else:
-            tcpclient = TCPclient()
-            data=tcpclient.sendmsg(path, "TRUNCATE#"+str(length))
+        pass
 
     def unlink(self, path):
         global logger
         logger.log("INFO", "unlink", path)
-        tcpclient = TCPclient()
-        data=tcpclient.sendmsg(path, "UNLINK")
-        self.files[path] = pickle.loads(data)
-        location = self.files[path]['location']
-        tcpclient.deletefile(path, "DELETE", location)
-        if path in self.files:
-            self.files.pop(path)
+        pass
         
     def utimens(self, path, times=None):
         global logger
         logger.log("INFO", "utimens", path)
-        now = time()
-        atime, mtime = times if times else (now, now)
-        if path not in self.files:
-            self.create(path, 0o755)
-            self.wmeta[path]['st_atime'] = atime
-            self.wmeta[path]['st_mtime'] = mtime
-        else:
-            self.files[path]['st_atime'] = atime
-            self.files[path]['st_mtime'] = mtime
+        pass
 
     def write(self, path, data, offset, fh):
         global logger
         logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
-        md5=hashlib.md5()
-        md5.update(path.encode())
-        key = md5.hexdigest()
-        if path in self.wmeta:
-            self.wcache[key] = self.wcache[key][:offset] + data
-            self.wmeta[path]['st_size'] = self.wmeta[path]['st_size'] + len(data)
-        elif offset > 0:
-            logger.log("INFO", "write_append", path+", length: "+str(len(data))+", offset: "+str(offset))
-            if key in self.data:
-                self.data.pop(key)
-            #append data to where the data is
-            tcpclient = TCPclient()
-            ret=tcpclient.appenddata(path, offset, data)
-            return len(data)
-
-        return len(data)
+        pass
 
     def release(self, path, fh):
         global logger
-        #global executor
-        logger.log("INFO", "release", path)
-        md5=hashlib.md5()
-        md5.update(path.encode())
-        key = md5.hexdigest()
-        #update metadata on a remote server
-        tcpclient = TCPclient()
-        if key in self.wcache:
-            self.data[key] = self.wcache[key]
-            ret = tcpclient.insertmeta(path, self.wmeta[path])
-        elif key not in self.wcache:
-            if key not in self.data:
-                ret=tcpclient.remoterelease(path)
-        #elif key in executor.waiting:
-        #    return 0
-        return 0
+        pass
 
     def local_chmod(self, path, mode):
         global logger
         logger.log("INFO", "local_chmod", path+", "+str(mode))
-        #redirect metadata operation to remote server
-        self.files[path]['st_mode'] &= 0o770000
-        self.files[path]['st_mode'] |= mode
-        return 0
+        pass
 
     def local_chown(self, path, uid, gid):
         global logger
         logger.log("INFO", "local_chown", path+", "+str(uid)+", "+str(gid))
-        #redirect metadata operation to remote server
-        self.files[path]['st_uid'] = uid
-        self.files[path]['st_gid'] = gid
-
+        pass
 
     def local_create(self, path, mode, ip):
         global logger
         logger.log("INFO", "local_create", path+", "+str(mode)+", "+str(ip))
-        self.files[path] = dict(st_mode=(S_IFREG | mode), st_nlink=1,
-                                st_size=0, st_ctime=time(), st_mtime=time(),
-                                st_atime=time(), location=ip)
-
-        self.fd += 1
-        return self.fd
+        pass
 
     def local_getxattr(self, path, name, position=0):
         global logger
         logger.log("INFO", "local_getxattr", path+", "+str(name))
-        #retrieve metadata from remote server 
-        attrs = self.files[path].get('attrs', {})
-
-        try:
-            return attrs[name]
-        except KeyError:
-            logger.log("ERROR", "local_getxattr", name+" is not an attribute of "+path)
-            return ''       # Should return ENOATTR
+        pass
 
     def local_listxattr(self, path):
         global logger
         logger.log("INFO", "local_listxattr", path)
-        #retrieve metadata from remote server
-        attrs = self.files[path].get('attrs', {})
-        return list(attrs.keys())
+        pass
 
         
     def local_mkdir(self, path, mode):
         global logger
         logger.log("INFO", "local_mkdir", path+", "+str(mode))
-        parent = os.path.dirname(path)
-        #update metadata on remote server
-        if parent not in self.files:
-            logger.log("ERROR", "local_mkdir", parent+" does not exist")
-            raise FuseOSError(ENOENT)
-        else:
-            nlink=self.files[parent]['st_nlink']
-            self.files[path] = dict(st_mode=(S_IFDIR | mode), st_nlink=nlink+1, st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time(), location=[])
-            self.files[parent]['st_nlink'] += 1
+        pass
 
     def local_readdir(self, path, fh):
         global logger
         logger.log("INFO", "local_readdir", path)
-        metadict = {}
-            
-        ilist=[]
-        for x in self.files:
-            if x != '/' and path == os.path.dirname(x) and not S_ISDIR(self.files[x]['st_mode']):
-                iname=x[len(path):]
-                if iname[0] == '/':
-                    iname = iname[1:]
-                ilist.append(iname)
-                metadict[x] = self.files[x]
-        return metadict
+        pass
 
     def local_readlink(self, path):
         global logger
         logger.log("INFO", "local_readlink", path)
-        md5=hashlib.md5()
-        md5.update(path.encode())
-        key = md5.hexdigest()
-        return self.data[key]
+        pass
 
     def local_removexattr(self, path, name):
         global logger
         logger.log("INFO", "local_removeattr", path+", "+name)
-        attrs = self.files[path].get('attrs', {})
-
-        try:
-            del attrs[name]
-        except KeyError:
-            pass        # Should return ENOATTR
+        pass
 
     def local_rename(self, old, new):
         global logger
         logger.log("INFO", "local_rename", "old: "+old+" new: "+new)
-        md5=hashlib.md5()
-        md5.update(old.encode())
-        oldkey = md5.hexdigest()
-        md5=hashlib.md5()
-        md5.update(new.encode())
-        newkey = md5.hexdigest()
-        self.data[newkey] = self.data.pop(oldkey)
-        return 0
+        pass
 
     def local_insert(self, path, meta):
         global logger
         logger.log("INFO", "local_insert", path)
-        self.files[path] = meta
-        #broad file location to waiters
-        if path in self.waiting:
-            tcpclient = TCPclient()
-            for i in self.waiting[path]:
-                if i != ip:
-                    tcpclient.updatelocation(path, i, meta)
-            self.waiting.pop(path)
-        return 0
+        pass
 
     def local_rmdir(self, path):
         global logger
         logger.log("INFO", "local_rmdir", path)
-        self.files.pop(path)
-        self.files['/']['st_nlink'] -= 1
 
     def local_setxattr(self, path, name, value, options, position=0):
         # Ignore options
@@ -509,85 +242,40 @@ class RAMdisk(LoggingMixIn, Operations):
     def local_symlink(self, target, source, ip):
         global logger
         logger.log("INFO", "local_symlink", "target: "+target+" source: "+source)
-        #update metadata on a remote server
-        self.files[target] = dict(st_mode=(S_IFLNK | 0o777), st_nlink=1,
-                                  st_size=len(source), location=ip)
-
-        md5=hashlib.md5()
-        md5.update(target.encode())
-        key = md5.hexdigest()
-        self.data[key] = source
 
     def local_truncate(self, path, length, fh=None):
         global logger
         logger.log("INFO", "local_truncate", path+", "+str(length))
-        self.files[path]['st_size'] = length
 
     def local_unlink(self, path):
         global logger
         logger.log("INFO", "local_unlink", path)
-        self.files.pop(path)
 
     def local_delete(self, path):
         global logger
         logger.log("INFO", "local_delete", path)
-        md5=hashlib.md5()
-        md5.update(path.encode())
-        key = md5.hexdigest()
-        self.data.pop(key)
         
     def local_utimens(self, path, times=None):
         global logger
         logger.log("INFO", "local_utimens", path)
-        now = time()
-        atime, mtime = times if times else (now, now)
-        self.files[path]['st_atime'] = atime
-        self.files[path]['st_mtime'] = mtime
 
     def local_append(self, path, offset, data):
         global logger
         logger.log("INFO", "local_append", path+", "+str(offset)+", "+str(len(data)))
-        md5=hashlib.md5()
-        md5.update(path.encode())
-        key = md5.hexdigest()
-        self.wcache[key] = self.wcache[key][:offset] + data
-        self.wmeta[path]['st_size'] = self.wmeta[path]['st_size'] + len(data)
-        return len(data)
 
     def local_getattr(self, path, remoteip):
         global logger
         logger.log("INFO", "local_getattr", path)
-        ret = None
-        if path in self.files:
-            ret = ramdisk.files[path]
-        #else:
-        #    if path not in ramdisk.waiting:
-        #        logger.log("INFO", "local_getattr", path+" does not exist, append "+remoteip+" to self.waiting")
-        #        ramdisk.waiting[path] = []
-        #        ramdisk.waiting[path].append(remoteip)
-        return ret
 
     def local_release(self, path):
         global logger
         logger.log("INFO", "local_release", path)
-        md5=hashlib.md5()
-        md5.update(path.encode())
-        key = md5.hexdigest()
-        self.data[key] = self.wcache[key]
-        tcpclient = TCPclient()
-        tcpclient.insertmeta(path, self.wmeta[path])
 
     def local_updatelocation(self, path, meta):
         global logger
-        #global executor
         logger.log("INFO", "local_updatelocation", path+" location: "+meta['location'])
-        self.files[path] = meta
-        #if path in executor.fmap:
-        #    task = executor.fmap.pop(path)
-        #    executor.readyqueue.put(task, True, None)
-        return 0
+        
 
-            
 class TCPclient():
     def init(self, ip):
         global logger
