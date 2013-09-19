@@ -393,23 +393,43 @@ class RAMdisk(LoggingMixIn, Operations):
         global logger
         logger.log("INFO", "getxattr", path+", "+name)
         #retrieve metadata from remote server 
-        tcpclient = TCPclient()
-        data=tcpclient.sendmsg(path, "GETXATTR")
-        attrs = pickle.loads(data)
+        if path in self.files:
+            attrs = self.files[path].get('attrs', {})
+            try:
+                return attrs[name]
+            except KeyError:
+                return b''
+        elif path in self.wmeta:
+            attrs = self.wmeta[path].get('attrs', {})
+            try:
+                return attrs[name]
+            except KeyError:
+                return b''
+        else:
+            tcpclient = TCPclient()
+            data=tcpclient.sendmsg(path, "GETXATTR")
+            attrs = pickle.loads(data)
         
-        try:
-            return attrs[name]
-        except KeyError:
-            return ''       # Should return ENOATTR
+            try:
+                return attrs[name]
+            except KeyError:
+                return b''       # Should return ENOATTR
 
     def listxattr(self, path):
         global logger
         logger.log("INFO", "listxattr", path)
-        #retrieve metadata from remote server
-        tcpclient = TCPclient()
-        data=tcpclient.sendmsg(path, "GETXATTR")
-        attrs = pickle.loads(data)
-        return list(attrs.keys())
+        if path in self.files:
+            attrs = self.files[name].get('attrs', {})
+            return attrs.keys()
+        elif path in self.wmeta:
+            attrs = self.wmeta[name].get('attrs', {})
+            return attrs.keys()
+        else:
+            #retrieve metadata from remote server
+            tcpclient = TCPclient()
+            data=tcpclient.sendmsg(path, "GETXATTR")
+            attrs = pickle.loads(data)
+            return attrs.keys()
 
     def mkdir(self, path, mode):
         global logger
@@ -561,8 +581,15 @@ class RAMdisk(LoggingMixIn, Operations):
         logger.log("INFO", "utimens", path)
         now = time()
         atime, mtime = times if times else (now, now)
-        self.files[path]['st_atime'] = atime
-        self.files[path]['st_mtime'] = mtime
+        if path not in self.files:
+            self.wmeta[path] = dict(st_mode=(S_IFREG | 0o755), st_nlink=1,
+                                st_size=0, st_ctime=time(), st_mtime=time(),
+                                st_atime=time(), location=ip)
+            self.wmeta[path]['st_atime'] = atime
+            self.wmeta[path]['st_mtime'] = mtime
+        else:
+            self.files[path]['st_atime'] = atime
+            self.files[path]['st_mtime'] = mtime
 
     def write(self, path, data, offset, fh):
         global logger
