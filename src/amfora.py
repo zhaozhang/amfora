@@ -23,7 +23,11 @@ import hashlib
 import subprocess
 import codecs
 
-###methods that have not been implemented are removexattr, setxattr###
+'''
+Amfora is a shared in-memory file system. Amfora is POSIX compatible.
+NOTE: Methods that have not been implemented are removexattr, setxattr
+'''
+
 class Logger():
     def __init__(self, logfile):
         self.fd = open(logfile, "w")
@@ -35,21 +39,33 @@ class Logger():
 if not hasattr(__builtins__, 'bytes'):
     bytes = str
 
-class RAMdisk(LoggingMixIn, Operations):
+class Amfora(LoggingMixIn, Operations):
     def __init__(self):
-        self.files = {}
-        self.cache = {}
+        '''
+        Amfora data is organized as following:
+        self.meta stores persistent metadata
+        self.data stores persistent file data
+        self.cmeta stores transient local metadata
+        self.cdata stores transient local file data
+        self.cdata is replicated in self.data once the write in self.cdata is completed (released).
+        '''
+        self.meta = {}
         self.data = defaultdict(bytes)
+        self.cmeta = {}
+        self.cdata = defaultdict(bytes)
         self.fd = 0
-        now = time()
-        self.files['/'] = dict(st_mode=(S_IFDIR | 0o755), st_ctime=now,
-                               st_mtime=now, st_atime=now, st_nlink=2, location=[])
-        self.wcache = defaultdict(bytes)
-        self.wmeta = {}
-        self.waiting = {}
-        self.shuffledict = defaultdict(bytes)
         
-    #below are collective interface
+        #initializing the root directory
+        now = time()
+        self.meta['/'] = dict(st_mode=(S_IFDIR | 0o755), st_ctime=now,
+                               st_mtime=now, st_atime=now, st_nlink=2, location=[])
+
+        #data entry for potential shuffle operation
+        self.shuffledict = defaultdict(bytes)
+
+    '''    
+    below are collective interface
+    '''
     def multicast(self, path, algo):
         pass
     def allgather(self, path, algo):
@@ -69,22 +85,64 @@ class RAMdisk(LoggingMixIn, Operations):
     def execute(self):
         pass
 
-    #below are POSIX interface
+    '''
+    below are POSIX interface
+    '''
     def chmod(self, path, mode):
         global logger
+        global misc
         logger.log("INFO", "chmod", path+", "+str(mode))
-
+        if path in self.meta: 
+            self.meta[path]['st_mode'] &= 0o770000 
+            self.meta[path]['st_mode'] |= mode
+        else:
+            #send a chmod message to remote server
+            tcpclient = TCPClient()
+            ip = misc.findserver(path)
+            tcpclient = TCPClient(ip)
+            packet = Packet(path, "chmod", None, None, None, ip, mode)
+            ret=tcpclient.sendpacket(packet)
+            if ret != 0:
+                logger.log("ERROR", "chmod", path+" with "+str(mode)+" failed on "+ip)
+            
     def chown(self, path, uid, gid):
         global logger
         logger.log("INFO", "chown", path+", "+str(uid)+", "+str(gid))
 
     def create(self, path, mode):
         global logger
+        global misc
+        global localip
         logger.log("INFO", "create", path+", "+str(mode))
+        ip = misc.findserver(path)
+        if ip == localip:
+            self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
+                                     st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time())
+            self.id += 1
+            return self.id
+        else:
+            packet = Packet(path, "create", None, None, None, mode)
+            tcpclient = TCPClient()
+            ret = tcpclient.sendpacket(packet)
+            if ret != 0:
+                logger.log("ERROR", "create", "creating "+path+" failed on "+ip)
 
     def getattr(self, path, fh=None):
         global logger
+        global misc
         logger.log("INFO", "getattr", path)
+        if path in self.meta:
+            return self.meta[path]
+        elif path in self.cmeta:
+            return self.cmeta[path]
+        else:
+            tcpclient = TCPClient()
+            packet = Packet(path, "getattr", None, None, None, None)
+            ret = tcpclient.sendpacket(packet)
+            if not ret:
+                raise OSError(ENOENT, '')
+            else:
+                return ret
 
     def getxattr(self, path, name, position=0):
         global logger
@@ -102,10 +160,25 @@ class RAMdisk(LoggingMixIn, Operations):
     def open(self, path, flags):
         global logger
         logger.log("INFO", "open", path+", "+str(flags))
+        self.fd += 1
+        return self.fd
 
     def read(self, path, size, offset, fh):
         global logger
+        global misc
         logger.log("INFO", "read", path+", "+str(size)+", "+str(offset))
+        hvalue = hash(path)
+        if hvalue in self.cdata:
+            return bytes(self.cdata[hvalue][offset:offset + size])
+        elif hvalue in self.data:
+            return bytes(self.data[hvalue][offset:offset + size])
+        else:
+            ip = misc.findserver(path)
+            packet = Packet(path, "read", None, None, None, ip, [size, offset])
+            tcpclient = TCPClient()
+            #just reading the bytes as specified, need to do prefetch the whole file here
+            ret = tcpclient.sendpacket(packet)
+            return bytes(ret)
 
     def readdir(self, path, fh):
         global logger
@@ -152,8 +225,22 @@ class RAMdisk(LoggingMixIn, Operations):
 
     def truncate(self, path, length, fh=None):
         global logger
+        global misc
         logger.log("INFO", "truncate", path+", "+str(length))
-        pass
+        hvalue = hash(path)
+        if hvalue in self.cdata:
+            del self.cdata[path][length:]
+            self.cdata[path]['st_size'] = length
+        elif hvalue in self.data:
+            del sef.data[path][length:]
+            self.data[path]['st_size'] = length
+        else:
+            ip = misc.findserver(path)
+            packet = Packet(path, "truncate", None, None, None, ip, length)
+            tcpclient = TCPClient()
+            ret = tcpclient.sendpacket(packet)
+            if ret != 0:
+                logger.log("ERROR", "truncate", "failed on "+path+" with length: "+str(length))
 
     def unlink(self, path):
         global logger
@@ -167,9 +254,39 @@ class RAMdisk(LoggingMixIn, Operations):
 
     def write(self, path, data, offset, fh):
         global logger
+        global misc
         logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
-        pass
-
+        hvalue = hash(path)
+        #write to the right place
+        if hvalue in self.cdata:
+            del self.cdata[hvalue][offset:]
+            self.cdata[hvalue].extend(data)
+            #might update on a remote server
+            self.mdata[path]['st_size'] = len(self.cdata[hvalue])
+        elif hvalue in self.data:
+            del self.data[hvalue][offset:]
+            self.data[hvalue].extend(data)
+            self.meta[path]['st_size'] = len(self.data[hvalue])
+        else:
+            ip = misc.findserver(path)
+            packet = Packet(path, "locate", None, None, None, ip, None)
+            tcpclient = TCPClient()
+            ret = tcpclient.sendpacket(packet)
+            packet = packet(path, "write", None, None, None, ret, data)
+            ret = tcpclient.sendpacket(packet)
+            
+        #update the metadata
+        if path in self.cmeta:
+            self.cmeta[path]['st_size'] = len(self.cmeta[path]['st_size']+len(data))
+        if path in self.meta:    
+            self.meta[path]['st_size'] = len(self.meta[path]['st_size']+len(data))
+        else:
+            ip = misc.findserver(path)
+            packet = Packet(path, "updatesize", None, None, None, ip, data)
+            tcpclient = TCPClient()
+            ret = tcpclient.sendpacket(packet)
+        return len(data)    
+            
     def release(self, path, fh):
         global logger
         pass
@@ -1150,6 +1267,26 @@ class Sendallthread(threading.Thread):
         self.server.close()
         logger.log("INFO", "Sendallthread_run", "multicastthread thread finished")
 
+class Packet():
+    def __init__(self, path, op, meta, data, ret, tlist, misc):
+        '''
+        The packet class defines the packet format used for inter-node communication.
+        self.path [string] specifies the file name that is being operated on
+        self.op [string] specifies the operation
+        self.meta [dict] specifies the metadata needs to be transferred related to this operation
+        self.data [defaultdict(bytes)] specifies the file data needs to be transferred related to this operation
+        self.ret [int] specifies the return value of the operation
+        self.tlist [string[]] specifies the targes that this packet is being routed to
+        self.misc [dynamic] specifies the opeartion parameter
+        '''
+        self.path = path
+        self.op = op
+        self.meta = meta
+        self.data = data
+        self.ret = ret
+        self.tlist = tlist
+        self.misc = misc
+
 class Task():
     def __init__(self, desc):
         self.queuetime = time()
@@ -1237,7 +1374,10 @@ if __name__ == '__main__':
 
     global parentip
     parentip = ''
-    
+
+    global misc
+    misc = Misc()
+
     global shuffleself
     shuffleself = 0
     
@@ -1252,8 +1392,8 @@ if __name__ == '__main__':
         slist.append(ip)
     logger.log("INFO", "main", "Metadata Server List: "+str(slist))
     
-    global ramdisk
-    ramdisk=RAMdisk()
+    global amfora
+    amfora=Amfora()
 
     global tcpqueue
     tcpqueue = queue.Queue()
