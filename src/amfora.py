@@ -34,7 +34,7 @@ class Logger():
     def log(self, info, function, message):
         #self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
         #self.fd.flush()
-        print("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
+        print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
 
 if not hasattr(__builtins__, 'bytes'):
     bytes = str
@@ -114,41 +114,40 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         global localip
-        logger.log("INFO", "create", path+", "+str(mode))
-        ip = misc.findserver(path)
-        if ip == localip:
-            self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
-                                     st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time())
-            hvalue = hash(path)
-            self.cdata[hvalue]=b'' 
-            self.fd += 1
-            return self.fd
-        else:
-            print("create sent to remote server")
-            #packet = Packet(path, "create", None, None, None, None, mode)
-            #tcpclient = TCPClient()
-            #ret = tcpclient.sendpacket(packet)
-            #if ret != 0:
-            #    logger.log("ERROR", "create", "creating "+path+" failed on "+ip)
+        logger.log("INFO", "CREATE", path+", "+str(mode))
+        self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
+                                     st_size=0, st_ctime=time(), st_mtime=time(), 
+                                     st_atime=time(), location=localip)
+        hvalue = hash(path)
+        self.cdata[hvalue]=b'' 
+        self.fd += 1
+        return self.fd
 
     def getattr(self, path, fh=None):
         global logger
         global misc
+        global localip
         logger.log("INFO", "getattr", path)
+        ip = misc.findserver(path)
+ 
         if path in self.meta:
             return self.meta[path]
         elif path in self.cmeta:
             return self.cmeta[path]
-        else:
-            print("getattr sent to remote server: "+path)
+
+        if ip == localip:
             raise OSError(ENOENT, '')
-            #tcpclient = TCPClient()
-            #packet = Packet(path, "getattr", None, None, None, None, None)
-            #ret = tcpclient.sendpacket(packet)
-            #if not ret:
-            #    raise OSError(ENOENT, '')
-            #else:
-            #    return ret
+        else:
+            logger.log("INFO", "GETATTR", "getattr sent to remote server: "+path)
+            ip = misc.findserver(path)
+            tcpclient = TCPClient()
+            packet = Packet(path, "GETATTR", None, None, None, [ip], None)
+            ret = tcpclient.sendpacket(packet)
+            if not ret.misc:
+                raise OSError(ENOENT, '')
+            else:
+                self.meta[path]=ret.misc
+                return ret.misc
 
     def getxattr(self, path, name, position=0):
         global logger
@@ -288,23 +287,27 @@ class Amfora(LoggingMixIn, Operations):
             
     def release(self, path, fh):
         global logger
-        logger.log("INFO", "release", path)
+        global misc
+        global localip
+        logger.log("INFO", "RELEASE", path)
+        ip = misc.findserver(path)
         hvalue = hash(path)
-        if hvalue in self.cdata.keys():
+        if path in self.cmeta:
             self.data[hvalue] = self.cdata[hvalue]
-            if path in self.cmeta:
+            if ip == localip:
                 self.meta[path] = self.cmeta[path]
+                return 0
             else:
-                print("release sent to remote server")
-                #global misc
-                #ip = misc.findserver(path)
-                #packet = Packet(path, "release", None, None, None, ip, None)
-                #tcpclient = TCPClient()
-                #ret = tcpclient.sendpacket(packet)
-                #if ret != 0:
-                #    logger.log("ERROR", "release", path+" failed")
-                #return ret    
-        elif hvalue in self.data:
+                logger.log("INFO", "RELEASE", "release sent to remote server: "+path+" "+ip)
+                tempdict = dict()
+                tempdict[path] = self.cmeta[path]
+                packet = Packet(path, "RELEASE", tempdict, None, None, [ip], None)
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "RELEASE", path+" failed")
+                return rpacket.ret    
+        else:
             return 0
 
     def local_chmod(self, path, mode):
@@ -396,37 +399,29 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         logger.log("INFO", "local_append", path+", "+str(offset)+", "+str(len(data)))
 
-    def local_getattr(self, path, remoteip):
+    def local_getattr(self, path):
         global logger
         logger.log("INFO", "local_getattr", path)
+        if path in self.meta:
+            return self.meta[path]
+        else:
+            return None
 
-    def local_release(self, path):
+    def local_release(self, path, meta):
         global logger
         logger.log("INFO", "local_release", path)
-
+        if path not in self.meta:
+            self.meta[path] = meta[path]
+            
     def local_updatelocation(self, path, meta):
         global logger
         logger.log("INFO", "local_updatelocation", path+" location: "+meta['location'])
         
 
 class TCPClient():
-    def init(self, ip):
-        global logger
-        logger.log("INFO", "TCPclient_init", "connet to "+ip)
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        port = 55000
-        connected = 0
-        while connected == 0:
-            try:
-                sock.connect((ip, port))
-            except socket.error:
-                logger.log("ERROR", "TCPclient_init", "connect "+ip+" failed, try again")
-                sleep(1)
-                continue
-            else:
-                logger.log("INFO", "TCPclient_init", "connet to "+ip+" succeeded")
-                connected = 1
-        return sock
+    def __init__(self):
+        self.bufsize = 1048576
+        self.psize = 16
 
     def init_port(self, ip, port):
         global logger
@@ -445,29 +440,68 @@ class TCPClient():
                 logger.log("INFO", "TCPclient_init_port", "connected to "+ip+":"+str(port))
         return sock
 
-    def sendmsg(self, filename, msg):
+    def sendpacket(self, packet):
         global logger
         global localip
         global ramdisk
-        logger.log("INFO", "TCPclient_sendmsg", filename+", "+msg)
-        size=1024
-        global slist
-        md5 = hashlib.md5()
-        md5.update(filename.encode())
-        key = md5.hexdigest()
-        value = int(key, 16)
-        ip = slist[value%len(slist)]
-        try:
-            s = self.init(ip)            
-            s.send(bytes(filename+'#'+msg, "utf8"))
-            ret = s.recv(size)
-            s.close()
-        except socket.error as msg:
-            logger.log("ERROR", "TCPclient_sendmsg", "Socket Exception: "+str(msg))
-        except Exception as msg:
-            logger.log("ERROR", "TCPclient_sendmsg", "Otehr Exception: "+str(msg))
-        finally:
-            return ret
+        logger.log("INFO", "TCPclient_sendpacket()", packet.path+" "+packet.op)
+
+        #Packet sent to a single host
+        if len(packet.tlist) == 1:
+            try:
+                #initialize the socket
+                s = self.init_port(packet.tlist[0], 55000)            
+
+                #dump packet into binary format
+                bpacket = pickle.dumps(packet)
+
+                #get the packet size
+                length = len(bpacket)
+                logger.log("INFO", "TCPclient.sendpacket()", "ready to send "+str(length)+" bytes")
+
+                #paddling the length of the packet to a 16 bytes number
+                slength = str(length)
+                while len(slength) < self.psize:
+                    slength = slength + '\0'
+
+                #send the length, and wait for an ack    
+                s.send(bytes(slength, 'utf-8'))
+                s.recv(1)
+            
+                #send the bpacket data
+                sent = 0
+                while sent < length:
+                    if length - sent > self.bufsize:
+                        sent_iter = s.send(bpacket[sent:sent+self.bufsize])
+                    else:
+                        sent_iter = s.send(bpacket[sent:])
+                    sent = sent + sent_iter
+                    logger.log("INFO", "TCPclient.sendpacket()", "send "+str(sent_iter)+" bytes")
+                logger.log("INFO", "TCPclient.sendpacket()", "totally send "+str(sent)+" bytes")    
+
+                #receive the size of the returned packet
+                data = s.recv(self.psize)
+                length = int(data.decode('utf8').strip('\0'))
+                s.send(bytes('0', 'utf8'))
+                data = b''
+                rect = 0
+                while rect < length:
+                    if length - rect > self.bufsize:
+                        temp = s.recv(self.bufsize)
+                    else:
+                        temp = s.recv(length-rect)
+                    rect = rect + len(temp)
+                    data = data + temp
+                    logger.log("INFO", "TCPclient.sendpacket()", "receive "+str(len(temp))+" bytes")
+                logger.log("INFO", "TCPclient.sendpacket()", "totally receive "+str(len(data))+" bytes")    
+                s.close()
+                packet = pickle.loads(data)
+            except socket.error as msg:
+                logger.log("ERROR", "TCPclient_sendpacket()", "Socket Exception: "+str(msg))
+            except Exception as msg:
+                logger.log("ERROR", "TCPclient_sendpacket()", "Other Exception: "+str(msg))
+            finally:
+                return packet
         
     def sendall(self, path, msg):
         global logger
@@ -777,7 +811,8 @@ class TCPserver(threading.Thread):
         self.id = workerid
         self.host = ''
         self.port = port
-        self.size = 1024
+        self.psize = 16
+        self.bufsize = 1048576
         self.server = None
 
     def open_socket(self):
@@ -802,47 +837,103 @@ class TCPserver(threading.Thread):
         while True:
             conn, addr = self.server.accept()
             try:
-                data = conn.recv(self.size)
+                data = conn.recv(self.psize)
+                length = int(data.decode('utf8').strip('\0'))
+                logger.log("INFO", "TCPServer.run()", "ready to receive "+str(length)+" bytes")
+                conn.send(bytes('0', 'utf-8'))
+                rect = 0
+                bpacket = b''
+
+                while rect < length:
+                    if length - rect > self.bufsize:
+                        temp = conn.recv(self.bufsize)
+                    else:
+                        temp = conn.recv(length-rect)
+                    rect = rect + len(temp)
+                    bpacket = bpacket+temp
+                    logger.log("INFO", "TCPServer.run()", "receive "+str(len(temp))+" bytes")
+                logger.log("INFO", "TCPServer.run()", "totally receive "+str(len(bpacket))+" bytes")    
             except socket.error:
                 logger.log("ERROR", "TCPserver_run", "socket exception when receiving message "+str(socket.error))
                 break
 
-            msg = data.decode("utf8").strip()
-            logger.log("INFO", "TCPserver_run", "received: "+str(msg))
-            tcpqueue.put([conn, msg], True, None)
+            packet = pickle.loads(bpacket)
+            logger.log("INFO", "TCPserver_run", "received: "+packet.op+" "+packet.path+" "+str(packet.tlist))
+            tcpqueue.put([conn, packet], True, None)
 
 class TCPworker(threading.Thread):
     def __init__(self, workerid):
         threading.Thread.__init__(self)
         self.id = workerid
+        self.psize = 16
+        self.bufsize = 1048576
+
+    def sendpacket(self, sock, packet):
+        logger.log("INFO", "TCPWorker.sendpacket()", "sending packet to "+str(packet.tlist))
+        try:
+            #dump packet into binary format
+            bpacket = pickle.dumps(packet)
+
+            #get the packet size
+            length = len(bpacket)
+            logger.log("INFO", "TCPworker.sendpacket()", "ready to send "+str(length)+" bytes")
+
+            #paddling the length of the packet to a 16 bytes number
+            slength = str(length)
+            while len(slength) < self.psize:
+                slength = slength + '\0'
+
+            #send the length, and wait for an ack    
+            sock.send(bytes(slength, 'utf-8'))
+            sock.recv(1)
+            
+            #send the bpacket data
+            sent = 0
+            while sent < length:
+                if length - sent > self.bufsize:
+                    sent_iter = sock.send(bpacket[sent:sent+self.bufsize])
+                else:
+                    sent_iter = sock.send(bpacket[sent:])
+                sent = sent + sent_iter
+                logger.log("INFO", "TCPworker.sendpacket()", "send "+str(sent_iter)+" bytes")
+            logger.log("INFO", "TCPworker.sendpacket()", "totally send "+str(sent)+" bytes")    
+        except socket.error as msg:
+            logger.log("ERROR", "TCPworker_sendpacket()", "Socket Exception: "+str(msg))
+        except Exception as msg:
+            logger.log("ERROR", "TCPworker_sendpacket()", "Other Exception: "+str(msg))
+        finally:
+            return sent
 
     def run(self):
         global logger
         global tcpqueue
         global locaip
-        global ramdisk
+        global amfora
         
         while True:
-            conn, msg = tcpqueue.get(True, None)
-            el = msg.split('#')
-            if el[1] == 'CREATE':
-                filename = el[0]
-                mode = int(el[2])
+            conn, packet = tcpqueue.get(True, None)
+            
+            if packet.op == 'CREATE':
+                filename = packet.path
+                mode = packet.misc
                 remoteip, remoteport = conn.getpeername()
-                ret = ramdisk.local_create(filename, mode, remoteip)
-                conn.send(bytes(str(ret), "utf8"))
+                ret = amfora.local_create(filename, mode, remoteip)
+                p = Packet(packet.path, packet.op, None, None, 0, [remoteip], None)
+                self.sendpacket(conn, p)
                 conn.close()
-            elif el[1] == 'RELEASE':
-                filename = el[0]
-                ret = ramdisk.local_release(filename)
-                conn.send(bytes(str(ret), "utf8"))
+            elif packet.op == 'RELEASE':
+                filename = packet.path
+                ret = amfora.local_release(filename, packet.meta)
+                remoteip, remoteport = conn.getpeername()
+                p = Packet(packet.path, packet.op, None, None, 0, [remoteip], None)
+                self.sendpacket(conn, p)
                 conn.close()
-            elif el[1] == 'READ':
+            elif packet.op == 'READ':
                 filename = el[0]
                 ret = ramdisk.files[filename]
                 conn.send(pickle.dumps(ret))
                 conn.close()
-            elif el[1] == 'COPY':
+            elif packet.op == 'COPY':
                 key = el[0]
                 ret = ramdisk.data[key]
                 data = pickle.dumps(ret)
@@ -854,86 +945,81 @@ class TCPworker(threading.Thread):
                 conn.recv(1)
                 tcp_big = TCP_big()
                 tcp_big.send(conn, data, length)
-                #sent = 0
-                #while sent < length:
-                #    sent_iter = conn.send(data[sent:])
-                #    sent = sent + sent_iter
-                #    logger.log("INFO", "TCPserver_run", "sent "+str(sent)+" bytes")
-                #conn.send(data)
                 conn.recv(1)
                 conn.close()
-            elif el[1] == 'GETATTR':
-                filename = el[0]
+            elif packet.op == 'GETATTR':
+                filename = packet.path
                 remoteip, remoteport = conn.getpeername()
-                ret = ramdisk.local_getattr(filename, remoteip)
-                conn.send(pickle.dumps(ret))
+                ret = amfora.local_getattr(filename)
+                p = Packet(packet.path, packet.op, None, None, 0, [remoteip], ret)
+                self.sendpacket(conn, p)
                 conn.close()
-            elif el[1] == 'GETXATTR':
+            elif packet.op == 'GETXATTR':
                 filename = el[0]
                 ret = None
                 if filename in ramdisk.files:
                     ret = ramdisk.files[filename].get('attrs', {})
                 conn.send(pickle.dumps(ret))
-            elif el[1] == 'CHMOD':
+            elif packet.op == 'CHMOD':
                 filename = el[0]
                 mode = int(el[2])
                 ret = ramdisk.local_chmod(filename, mode)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
-            elif el[1] == 'CHOWN':
+            elif packet.op == 'CHOWN':
                 filename = el[0]
                 uid = int(el[2])
                 gid = int(el[3])
                 ret = ramdisk.local_chown(filename, uid, gid)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
-            elif el[1] == 'TRUNCATE':
+            elif packet.op == 'TRUNCATE':
                 filename = el[0]
                 length = int(el[2])
                 ramdisk.local_truncate(filename, length)
                 conn.send(bytes(str(0), "utf8"))
                 conn.close()
-            elif el[1] == 'READDIR':
+            elif packet.op == 'READDIR':
                 path = el[0]
                 ret = ramdisk.local_readdir(path, 0)
                 conn.send(pickle.dumps(ret))
                 conn.close()
-            elif el[1] == 'MKDIR':
+            elif packet.op == 'MKDIR':
                 path = el[0]
                 mode = int(el[2])
                 ramdisk.local_mkdir(path, mode)
                 conn.send(bytes(str(0), "utf8"))
                 conn.close()
-            elif el[1] == 'UNLINK':
+            elif packet.op == 'UNLINK':
                 path = el[0]
                 ret = ramdisk.files[path]
                 conn.send(pickle.dumps(ret))
                 conn.close()
                 ramdisk.local_unlink(path)
-            elif el[1] == 'DELETE':
+            elif packet.op == 'DELETE':
                 path = el[0]
                 ramdisk.local_delete(path)
                 conn.send(bytes(str(0), "utf8"))
                 conn.close()
-            elif el[1] == 'SYMLINK':
+            elif packet.op == 'SYMLINK':
                 path = el[0]
                 source = el[2]
                 remoteip, remoteport = conn.getpeername()
                 ramdisk.local_symlink(path, source, remoteip)
                 conn.send(bytes(str(0), "utf8"))
                 conn.close()
-            elif el[1] == 'READLINK':
+            elif packet.op == 'READLINK':
                 path = el[0]
                 data = ramdisk.local_readlink(path)
                 conn.send(bytes(data, "utf8"))
                 conn.close()
-            elif el[1] == 'RENAME':
+            elif packet.op == 'RENAME':
                 old = el[0]
                 new = el[2]
                 data = ramdisk.local_rename(old, new)
                 conn.send(bytes(str(data), "utf8"))
                 conn.close()
-            elif el[1] == 'INSERTMETA':
+            elif packet.op == 'INSERTMETA':
                 path = el[0]
                 msize = int(el[2])
                 #print("INSERTMETA: size: "+str(msize))
@@ -944,7 +1030,7 @@ class TCPworker(threading.Thread):
                 data = ramdisk.local_insert(path, meta)
                 conn.send(bytes(str(data), "utf8"))
                 conn.close()
-            elif el[1] == 'APPENDDATA':
+            elif packet.op == 'APPENDDATA':
                 path = el[0]
                 msize = int(el[2])
                 offset = int(el[3])
@@ -953,7 +1039,7 @@ class TCPworker(threading.Thread):
                 data = ramdisk.local_append(path, offset, content)
                 conn.send(bytes(str(0), "utf8"))
                 conn.close()
-            elif el[1] == 'UPDATE':
+            elif packet.op == 'UPDATE':
                 path = el[0]
                 msize = int(el[2])
                 conn.send(bytes('0', 'utf8'))
@@ -965,8 +1051,10 @@ class TCPworker(threading.Thread):
                 ret = ramdisk.local_updatelocation(path, meta)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
-                        
-class Interfaceserver(threading.Thread):
+            else:
+                logger.log("ERROR", "TCPserver.run()", "Invalid op "+packet.op)
+'''
+Class Interfaceserver(threading.Thread):
     def __init__(self, workerid, port):
         threading.Thread.__init__(self)
         self.id = workerid
@@ -1067,6 +1155,7 @@ class Interfaceserver(threading.Thread):
                 ret = ramdisk.dump(src, dst)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
+'''
 
 class Misc():
     def __init__(self):
@@ -1256,13 +1345,13 @@ if __name__ == '__main__':
     global tcpqueue
     tcpqueue = queue.Queue()
 
-    #tcpserver = TCPserver('TCPserver', 55000)
-    #while not tcpserver.is_alive():
-    #    tcpserver.start()
+    tcpserver = TCPserver('TCPserver', 55000)
+    while not tcpserver.is_alive():
+        tcpserver.start()
 
-    #tcpworker = TCPworker('TCPworker')
-    #while not tcpworker.is_alive():
-    #    tcpworker.start()
+    tcpworker = TCPworker('TCPworker')
+    while not tcpworker.is_alive():
+        tcpworker.start()
 
     #interfaceserver = Interfaceserver('Interfaceserver', 55010)
     #while not interfaceserver.is_alive():
