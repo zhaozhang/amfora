@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-##!/home/zhaozhang/workplace/python/bin/python3.3
 import logging
 
 from collections import defaultdict
@@ -33,9 +32,10 @@ class Logger():
         self.fd = open(logfile, "w")
 
     def log(self, info, function, message):
-        self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
-        self.fd.flush()
-        
+        #self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
+        #self.fd.flush()
+        print("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
+
 if not hasattr(__builtins__, 'bytes'):
     bytes = str
 
@@ -96,14 +96,15 @@ class Amfora(LoggingMixIn, Operations):
             self.meta[path]['st_mode'] &= 0o770000 
             self.meta[path]['st_mode'] |= mode
         else:
+            print("chmod sent to remote server")
             #send a chmod message to remote server
-            tcpclient = TCPClient()
-            ip = misc.findserver(path)
-            tcpclient = TCPClient(ip)
-            packet = Packet(path, "chmod", None, None, None, ip, mode)
-            ret=tcpclient.sendpacket(packet)
-            if ret != 0:
-                logger.log("ERROR", "chmod", path+" with "+str(mode)+" failed on "+ip)
+            #tcpclient = TCPClient()
+            #ip = misc.findserver(path)
+            #tcpclient = TCPClient(ip)
+            #packet = Packet(path, "chmod", None, None, None, ip, mode)
+            #ret=tcpclient.sendpacket(packet)
+            #if ret != 0:
+            #    logger.log("ERROR", "chmod", path+" with "+str(mode)+" failed on "+ip)
             
     def chown(self, path, uid, gid):
         global logger
@@ -118,14 +119,17 @@ class Amfora(LoggingMixIn, Operations):
         if ip == localip:
             self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
                                      st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time())
-            self.id += 1
-            return self.id
+            hvalue = hash(path)
+            self.cdata[hvalue]=b'' 
+            self.fd += 1
+            return self.fd
         else:
-            packet = Packet(path, "create", None, None, None, mode)
-            tcpclient = TCPClient()
-            ret = tcpclient.sendpacket(packet)
-            if ret != 0:
-                logger.log("ERROR", "create", "creating "+path+" failed on "+ip)
+            print("create sent to remote server")
+            #packet = Packet(path, "create", None, None, None, None, mode)
+            #tcpclient = TCPClient()
+            #ret = tcpclient.sendpacket(packet)
+            #if ret != 0:
+            #    logger.log("ERROR", "create", "creating "+path+" failed on "+ip)
 
     def getattr(self, path, fh=None):
         global logger
@@ -136,13 +140,15 @@ class Amfora(LoggingMixIn, Operations):
         elif path in self.cmeta:
             return self.cmeta[path]
         else:
-            tcpclient = TCPClient()
-            packet = Packet(path, "getattr", None, None, None, None)
-            ret = tcpclient.sendpacket(packet)
-            if not ret:
-                raise OSError(ENOENT, '')
-            else:
-                return ret
+            print("getattr sent to remote server: "+path)
+            raise OSError(ENOENT, '')
+            #tcpclient = TCPClient()
+            #packet = Packet(path, "getattr", None, None, None, None, None)
+            #ret = tcpclient.sendpacket(packet)
+            #if not ret:
+            #    raise OSError(ENOENT, '')
+            #else:
+            #    return ret
 
     def getxattr(self, path, name, position=0):
         global logger
@@ -173,12 +179,13 @@ class Amfora(LoggingMixIn, Operations):
         elif hvalue in self.data:
             return bytes(self.data[hvalue][offset:offset + size])
         else:
-            ip = misc.findserver(path)
-            packet = Packet(path, "read", None, None, None, ip, [size, offset])
-            tcpclient = TCPClient()
+            print("read sent to remote server")
+            #ip = misc.findserver(path)
+            #packet = Packet(path, "read", None, None, None, ip, [size, offset])
+            #tcpclient = TCPClient()
             #just reading the bytes as specified, need to do prefetch the whole file here
-            ret = tcpclient.sendpacket(packet)
-            return bytes(ret)
+            #ret = tcpclient.sendpacket(packet)
+            #return bytes(ret)
 
     def readdir(self, path, fh):
         global logger
@@ -229,18 +236,16 @@ class Amfora(LoggingMixIn, Operations):
         logger.log("INFO", "truncate", path+", "+str(length))
         hvalue = hash(path)
         if hvalue in self.cdata:
-            del self.cdata[path][length:]
-            self.cdata[path]['st_size'] = length
-        elif hvalue in self.data:
-            del sef.data[path][length:]
-            self.data[path]['st_size'] = length
+            self.cdata[path] = self.cdata[path][:length]
+            self.cmeta[path]['st_size'] = length
         else:
-            ip = misc.findserver(path)
-            packet = Packet(path, "truncate", None, None, None, ip, length)
-            tcpclient = TCPClient()
-            ret = tcpclient.sendpacket(packet)
-            if ret != 0:
-                logger.log("ERROR", "truncate", "failed on "+path+" with length: "+str(length))
+            print("truncate sent to remote server")
+            #ip = misc.findserver(path)
+            #packet = Packet(path, "truncate", None, None, None, ip, length)
+            #tcpclient = TCPClient()
+            #ret = tcpclient.sendpacket(packet)
+            #if ret != 0:
+            #    logger.log("ERROR", "truncate", "failed on "+path+" with length: "+str(length))
 
     def unlink(self, path):
         global logger
@@ -259,37 +264,48 @@ class Amfora(LoggingMixIn, Operations):
         hvalue = hash(path)
         #write to the right place
         if hvalue in self.cdata:
-            del self.cdata[hvalue][offset:]
-            self.cdata[hvalue].extend(data)
-            #might update on a remote server
-            self.mdata[path]['st_size'] = len(self.cdata[hvalue])
-        elif hvalue in self.data:
-            del self.data[hvalue][offset:]
-            self.data[hvalue].extend(data)
-            self.meta[path]['st_size'] = len(self.data[hvalue])
+            self.cdata[hvalue] = self.cdata[hvalue][:offset]+data
+            self.data[hvalue] = self.data[hvalue][:offset]+data
         else:
-            ip = misc.findserver(path)
-            packet = Packet(path, "locate", None, None, None, ip, None)
-            tcpclient = TCPClient()
-            ret = tcpclient.sendpacket(packet)
-            packet = packet(path, "write", None, None, None, ret, data)
-            ret = tcpclient.sendpacket(packet)
+            print("write sent to remote server")
+            #ip = misc.findserver(path)
+            #packet = Packet(path, "locate", None, None, None, ip, None)
+            #tcpclient = TCPClient()
+            #ret = tcpclient.sendpacket(packet)
+            #packet = packet(path, "write", None, None, None, ret, [data, offset])
+            #ret = tcpclient.sendpacket(packet)
             
         #update the metadata
         if path in self.cmeta:
-            self.cmeta[path]['st_size'] = len(self.cmeta[path]['st_size']+len(data))
-        if path in self.meta:    
-            self.meta[path]['st_size'] = len(self.meta[path]['st_size']+len(data))
+            self.cmeta[path]['st_size'] = self.cmeta[path]['st_size']+len(data)
         else:
-            ip = misc.findserver(path)
-            packet = Packet(path, "updatesize", None, None, None, ip, data)
-            tcpclient = TCPClient()
-            ret = tcpclient.sendpacket(packet)
+            print("write+update+meta sent to remote server")
+            #ip = misc.findserver(path)
+            #packet = Packet(path, "updatesize", None, None, None, ip, data)
+            #tcpclient = TCPClient()
+            #ret = tcpclient.sendpacket(packet)
         return len(data)    
             
     def release(self, path, fh):
         global logger
-        pass
+        logger.log("INFO", "release", path)
+        hvalue = hash(path)
+        if hvalue in self.cdata.keys():
+            self.data[hvalue] = self.cdata[hvalue]
+            if path in self.cmeta:
+                self.meta[path] = self.cmeta[path]
+            else:
+                print("release sent to remote server")
+                #global misc
+                #ip = misc.findserver(path)
+                #packet = Packet(path, "release", None, None, None, ip, None)
+                #tcpclient = TCPClient()
+                #ret = tcpclient.sendpacket(packet)
+                #if ret != 0:
+                #    logger.log("ERROR", "release", path+" failed")
+                #return ret    
+        elif hvalue in self.data:
+            return 0
 
     def local_chmod(self, path, mode):
         global logger
@@ -393,7 +409,7 @@ class Amfora(LoggingMixIn, Operations):
         logger.log("INFO", "local_updatelocation", path+" location: "+meta['location'])
         
 
-class TCPclient():
+class TCPClient():
     def init(self, ip):
         global logger
         logger.log("INFO", "TCPclient_init", "connet to "+ip)
@@ -480,165 +496,7 @@ class TCPclient():
         else:
             return 0
 
-    def retrievefile(self, filename, msg, ip, size):
-        global logger
-        logger.log("INFO", "TCPclient_retrievefile", "retrieve "+filename+" from "+ip+" size: "+str(size))
-        try:
-            temp=b''
-            ret = b''
-            s = self.init(ip)            
-            s.send(bytes(filename+'#'+msg, "utf8"))
-            data = s.recv(10)
-            dsize = data.decode('utf8').strip('\0')
-            s.send(bytes('0', 'utf8'))
-            tcp_big = TCP_big()
-            temp = tcp_big.recv(s, int(dsize))
-            
-            s.send(bytes('0', 'utf8'))
-            ret=pickle.loads(temp)    
-        except socket.error as msgg:
-            logger.log("ERROR", "TCPclient_retrievefile", "Socket Exception: "+str(msgg))
-        except Exception as msgg:
-            logger.log("ERROR", "TCPclient_retrievefile", "Other Exception: "+str(msgg))
-        finally:
-            #s.close()
-            return ret
 
-    def deletefile(self, filename, msg, ip):
-        global logger
-        global localip
-        global ramdisk
-        logger.log("INFO", "TCPclient_deletefile", "delete "+filename+" at "+ip)
-        if ip == localip:
-            ramdisk.local_delete(filename)
-            return 0
-        try:
-            dsize=1024
-            s = self.init(ip)            
-            s.send(bytes(filename+'#DELETE', "utf8"))
-            ret=s.recv(dsize)
-            s.close()
-        except socket.error as msgg:
-            logger.log("ERROR", "TCPclient_deletefile", "Socket Exception: "+str(msgg))
-        except Exception as msgg:
-            logger.log("ERROR", "TCPclient_deletefile", "Other Exception: "+str(msgg))
-        finally:
-            return ret
-
-    def renamefile(self, old, new, ip):
-        global logger
-        global localip
-        global ramdisk
-        logger.log("INFO", "TCPclient_renamefile", "rename "+old+" with "+new)
-        if ip == localip:
-            ret = ramdisk.local_rename(old, new)
-            return ret
-        try:
-            dsize=1024
-            s = self.init(ip)            
-            s.send(bytes(old+'#RENAME#'+new, "utf8"))
-            ret=s.recv(dsize)
-            s.close()
-        except socket.error as msgg:
-            logger.log("ERROR", "TCPclient_renamefile", "Socket Exception: "+str(msgg))
-        except Exception as msgg:
-            logger.log("ERROR", "TCPclient_renamefile", "Other Exception: "+str(msgg))
-        finally:
-            return ret
-
-    def updatelocation(self, path, ip, meta):
-        global logger
-        logger.log("INFO", "TCPclient_updatelocation", "update file: "+path+"'s location:"+meta['location']+" to "+ip)
-        try:
-            dsize=1024
-            s = self.init(ip)            
-            s.send(bytes(path+'#UPDATE#'+str(len(pickle.dumps(meta))), "utf8"))
-            s.recv(1)
-            s.send(pickle.dumps(meta))
-            ret=s.recv(dsize)
-            s.close()
-        except socket.error as msgg:
-            logger.log("ERROR", "TCPclient_updatelocation", "Socket Exception: "+str(msgg))
-        except Exception as msgg:
-            logger.log("ERROR", "TCPclient_updatelocation", "Other Exception: "+str(msgg))
-        finally:
-            return ret
-        
-    def insertmeta(self, path, meta):
-        global logger
-        global localip
-        global ramdisk
-        logger.log("INFO", "TCPclient_insertmeta", "insertmetadata of "+path)
-        try:
-            global slist
-            md5 = hashlib.md5()
-            md5.update(path.encode())
-            key = md5.hexdigest()
-            value = int(key, 16)
-            ip = slist[value%len(slist)]
-            if ip == localip:
-                ret = ramdisk.local_insert(path, meta)
-                logger.log("INFO", "TCPclient_insertmeta", "insertmetadata of "+path+" suceeded locally")
-                return ret
-            dsize=1024
-            s = self.init(ip)            
-            s.send(bytes(path+'#INSERTMETA#'+str(len(pickle.dumps(meta))), "utf8"))
-            ret = s.recv(1)
-            s.send(pickle.dumps(meta))
-            ret=s.recv(dsize)
-            s.close()
-        except socket.error as msgg:
-            logger.log("ERROR", "TCPclient_insertmeta", "Socket Exception: "+str(msgg))
-        except Exception as msgg:
-            logger.log("ERROR", "TCPclient_insertmeta", "Other Exception: "+str(msgg))
-        finally:
-            logger.log("INFO", "TCPclient_insertmeta", "insertmetadata of "+path+" suceeded")
-            return ret
-
-    def appenddata(self, path, offset, data):
-        global logger
-        logger.log("INFO", "TCPclient_appenddata", "append "+str(len(data))+" bytes to "+path+" at offset: "+str(offset))
-        try:
-            dsize=1024
-            meta=self.sendmsg(path, "GETATTR")
-            ret = pickle.loads(meta)
-            ip = ret['location']
-
-            s = self.init(ip)
-            s.send(bytes(path+'#APPENDDATA#'+str(len(pickle.dumps(data)))+"#"+str(offset), "utf8"))
-            s.send(pickle.dumps(data))
-            ret=s.recv(dsize)
-            s.close()
-        except socket.error as msgg:
-            logger.log("ERROR", "TCPclient_insertmeta", "Socket Exception: "+str(msgg))
-        except Exception as msgg:
-            logger.log("ERROR", "TCPclient_insertmeta", "Other Exception: "+str(msgg))
-        finally:
-            return ret
-
-    def remoterelease(self, path):
-        global logger
-        logger.log("INFO", "TCPclient_remoterelease", path)
-        try:
-            dsize=1024
-            meta=self.sendmsg(path, "GETATTR")
-            ret = pickle.loads(meta)
-            if not ret:
-                return None
-            ip = ret['location']
-
-            s = self.init(ip)
-            s.send(bytes(path+'#RELEASE', "utf8"))
-            ret=s.recv(dsize)
-            s.close()
-        except socket.error as msgg:
-            logger.log("ERROR", "TCPclient_remoterelease", "Socket Exception: "+str(msgg))
-        except Exception as msgg:
-            logger.log("ERROR", "TCPclient_remoterelease", "Other Exception: "+str(msgg))
-        finally:
-            return ret
-
-        
 class ALLTCPserver(threading.Thread):
     def __init__(self, workerid, port, ramdisk):
         threading.Thread.__init__(self)
@@ -1398,21 +1256,21 @@ if __name__ == '__main__':
     global tcpqueue
     tcpqueue = queue.Queue()
 
-    tcpserver = TCPserver('TCPserver', 55000)
-    while not tcpserver.is_alive():
-        tcpserver.start()
+    #tcpserver = TCPserver('TCPserver', 55000)
+    #while not tcpserver.is_alive():
+    #    tcpserver.start()
 
-    tcpworker = TCPworker('TCPworker')
-    while not tcpworker.is_alive():
-        tcpworker.start()
+    #tcpworker = TCPworker('TCPworker')
+    #while not tcpworker.is_alive():
+    #    tcpworker.start()
 
-    interfaceserver = Interfaceserver('Interfaceserver', 55010)
-    while not interfaceserver.is_alive():
-        interfaceserver.start()
+    #interfaceserver = Interfaceserver('Interfaceserver', 55010)
+    #while not interfaceserver.is_alive():
+    #    interfaceserver.start()
         
-    alltcpserver = ALLTCPserver('ALLTCPserver', 55001, ramdisk)
-    while not alltcpserver.is_alive():
-        alltcpserver.start()
+    #alltcpserver = ALLTCPserver('ALLTCPserver', 55001, ramdisk)
+    #while not alltcpserver.is_alive():
+    #    alltcpserver.start()
 
-    fuse = FUSE(ramdisk, argv[1], foreground=True, big_writes=True, direct_io=True)
+    fuse = FUSE(amfora, argv[1], foreground=True, big_writes=True, direct_io=True)
 
