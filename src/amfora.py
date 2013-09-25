@@ -155,10 +155,39 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         logger.log("INFO", "getxattr", path+", "+name)
         #if empty return b''
+        try:
+            if path in self.cmeta:
+                return self.cmeta[path][name]
+            elif path in self.meta:
+                return self.meta[path][name]
+            else:
+                global misc
+                ip = misc.findserver(path)
+                packet = Packet(path, "GETATTR", None, None, None, [ip], None)
+                ret = tcp.sendpacket(packet)
+                if not ret.meta:
+                    return b''
+                else:
+                    return ret.meta[name]
+        except KeyError:
+            return b''
 
     def listxattr(self, path):
         global logger
         logger.log("INFO", "listxattr", path)
+        if path in self.cmeta:
+            return self.cmeta[path].keys()
+        elif path in self.meta[path]:
+            return self.meta[path].keys()
+        else:
+            global misc
+            ip = misc.findserver(path)
+            packet = Packet(path, "GETATTR", None, None, None, [ip], None)
+            ret = tcp.sendpacket(packet)
+            if not ret.meta:
+                raise OSError(ENOENT, '')
+            else:
+                return ret.meta[path].keys()
 
     def mkdir(self, path, mode):
         global logger
