@@ -18,9 +18,9 @@ import datetime
 import pickle
 import os
 import string
-import hashlib
 import subprocess
 import codecs
+import zlib
 
 '''
 Amfora is a shared in-memory file system. Amfora is POSIX compatible.
@@ -118,7 +118,7 @@ class Amfora(LoggingMixIn, Operations):
         self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
                                      st_size=0, st_ctime=time(), st_mtime=time(), 
                                      st_atime=time(), location=localip)
-        hvalue = hash(path)
+        hvalue = misc.hash(path)
         self.cdata[hvalue]=b'' 
         self.fd += 1
         return self.fd
@@ -129,10 +129,12 @@ class Amfora(LoggingMixIn, Operations):
         global localip
         logger.log("INFO", "getattr", path)
         ip = misc.findserver(path)
- 
+        logger.log("INFO", "getattr", "metadata of "+path+" is at "+ip)
         if path in self.meta:
+            logger.log("INFO", "getattr", "metadata of "+path+" is self.meta ")
             return self.meta[path]
         elif path in self.cmeta:
+            logger.log("INFO", "getattr", "metadata of "+path+" is self.cmeta ")
             return self.cmeta[path]
 
         if ip == localip:
@@ -143,11 +145,11 @@ class Amfora(LoggingMixIn, Operations):
             tcpclient = TCPClient()
             packet = Packet(path, "GETATTR", None, None, None, [ip], None)
             ret = tcpclient.sendpacket(packet)
-            if not ret.misc:
+            if not ret.meta:
                 raise OSError(ENOENT, '')
             else:
-                self.meta[path]=ret.misc
-                return ret.misc
+                self.meta[path]=ret.meta[path]
+                return self.meta[path]
 
     def getxattr(self, path, name, position=0):
         global logger
@@ -171,20 +173,24 @@ class Amfora(LoggingMixIn, Operations):
     def read(self, path, size, offset, fh):
         global logger
         global misc
-        logger.log("INFO", "read", path+", "+str(size)+", "+str(offset))
-        hvalue = hash(path)
+        logger.log("INFO", "READ", path+", "+str(size)+", "+str(offset))
+        hvalue = misc.hash(path)
         if hvalue in self.cdata:
             return bytes(self.cdata[hvalue][offset:offset + size])
         elif hvalue in self.data:
             return bytes(self.data[hvalue][offset:offset + size])
         else:
-            print("read sent to remote server")
-            #ip = misc.findserver(path)
-            #packet = Packet(path, "read", None, None, None, ip, [size, offset])
-            #tcpclient = TCPClient()
-            #just reading the bytes as specified, need to do prefetch the whole file here
-            #ret = tcpclient.sendpacket(packet)
-            #return bytes(ret)
+            ip = self.meta[path]['location']
+            logger.log("INFO", "READ", "read sent to remote server "+path+" "+ip)
+            packet = Packet(path, "READ", None, None, None, [ip], [size, offset])
+            tcpclient = TCPClient()
+            rpacket = tcpclient.sendpacket(packet)
+            if not rpacket.data:
+                logger.log("ERROR", "READ", "remote read on "+path+" failed on "+ip)
+                return None
+            else:
+                self.data[hvalue] = rpacket.data[hvalue]
+                return self.data[hvalue][offset:offset + size]
 
     def readdir(self, path, fh):
         global logger
@@ -233,7 +239,7 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         logger.log("INFO", "truncate", path+", "+str(length))
-        hvalue = hash(path)
+        hvalue = misc.hash(path)
         if hvalue in self.cdata:
             self.cdata[path] = self.cdata[path][:length]
             self.cmeta[path]['st_size'] = length
@@ -260,7 +266,7 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
-        hvalue = hash(path)
+        hvalue = misc.hash(path)
         #write to the right place
         if hvalue in self.cdata:
             self.cdata[hvalue] = self.cdata[hvalue][:offset]+data
@@ -291,7 +297,7 @@ class Amfora(LoggingMixIn, Operations):
         global localip
         logger.log("INFO", "RELEASE", path)
         ip = misc.findserver(path)
-        hvalue = hash(path)
+        hvalue = misc.hash(path)
         if path in self.cmeta:
             self.data[hvalue] = self.cdata[hvalue]
             if ip == localip:
@@ -307,6 +313,8 @@ class Amfora(LoggingMixIn, Operations):
                 if rpacket.ret != 0:
                     logger.log("ERROR", "RELEASE", path+" failed")
                 return rpacket.ret    
+        elif hvalue in self.data:
+            self.data.pop(hvalue)
         else:
             return 0
 
@@ -356,6 +364,17 @@ class Amfora(LoggingMixIn, Operations):
         logger.log("INFO", "local_removeattr", path+", "+name)
         pass
 
+    def local_read(self, path, size, offset):
+        global logger
+        logger.log("INFO", "local_read", path+", "+str(offset)+", "+str(size))
+        hvalue = misc.hash(path)
+        if hvalue in self.data:
+            tempdict = defaultdict(bytes)
+            tempdict[hvalue] = self.data[hvalue]
+            return tempdict
+        else:
+            return None
+
     def local_rename(self, old, new):
         global logger
         logger.log("INFO", "local_rename", "old: "+old+" new: "+new)
@@ -403,7 +422,9 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         logger.log("INFO", "local_getattr", path)
         if path in self.meta:
-            return self.meta[path]
+            tempdict = dict()
+            tempdict[path] = self.meta[path]
+            return tempdict
         else:
             return None
 
@@ -929,9 +950,10 @@ class TCPworker(threading.Thread):
                 self.sendpacket(conn, p)
                 conn.close()
             elif packet.op == 'READ':
-                filename = el[0]
-                ret = ramdisk.files[filename]
-                conn.send(pickle.dumps(ret))
+                filename = packet.path
+                ret = amfora.local_read(filename, packet.misc[0], packet.misc[1])
+                p = Packet(packet.path, packet.op, None, ret, 0, [remoteip], None)
+                self.sendpacket(conn, p)
                 conn.close()
             elif packet.op == 'COPY':
                 key = el[0]
@@ -951,7 +973,7 @@ class TCPworker(threading.Thread):
                 filename = packet.path
                 remoteip, remoteport = conn.getpeername()
                 ret = amfora.local_getattr(filename)
-                p = Packet(packet.path, packet.op, None, None, 0, [remoteip], ret)
+                p = Packet(packet.path, packet.op, ret, None, 0, [remoteip], None)
                 self.sendpacket(conn, p)
                 conn.close()
             elif packet.op == 'GETXATTR':
@@ -1162,8 +1184,10 @@ class Misc():
         pass
     def findserver(self, fname):
         global slist
-        value = hash(fname)
+        value = zlib.adler32(bytes(fname, 'utf8')) & 0xffffffff
         return slist[value%(len(slist))]
+    def hash(self, fname):
+        return zlib.adler32(bytes(fname, 'utf8')) & 0xffffffff
 
 class Sendallthread(threading.Thread):
     def __init__(self, server, pmap, retdict, msg):
