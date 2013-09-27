@@ -164,7 +164,8 @@ class Amfora(LoggingMixIn, Operations):
                 global misc
                 ip = misc.findserver(path)
                 packet = Packet(path, "GETATTR", None, None, None, [ip], None)
-                ret = tcp.sendpacket(packet)
+                tcpclient = TCPClient()
+                ret = tcpclient.sendpacket(packet)
                 if not ret.meta:
                     return b''
                 else:
@@ -183,7 +184,8 @@ class Amfora(LoggingMixIn, Operations):
             global misc
             ip = misc.findserver(path)
             packet = Packet(path, "GETATTR", None, None, None, [ip], None)
-            ret = tcp.sendpacket(packet)
+            tcpclient = TCPClient()
+            ret = tcpclient.sendpacket(packet)
             if not ret.meta:
                 raise OSError(ENOENT, '')
             else:
@@ -191,7 +193,13 @@ class Amfora(LoggingMixIn, Operations):
 
     def mkdir(self, path, mode):
         global logger
-        logger.log("INFO", "mkdir", path+", "+str(mode))
+        global slist
+        logger.log("INFO", "MKDIR", path+", "+str(mode))
+        packet = Packet(path, "MKDIR", None, None, None, slist, mode)
+        tcpclient = TCPClient()
+        rpacket = tcpclient.sendallpacket(packet)
+        if rpacket.ret != 0:
+            logger.log("ERROR", "MKDIR", "creating dir: "+path+" failed")
 
     def open(self, path, flags):
         global logger
@@ -376,7 +384,15 @@ class Amfora(LoggingMixIn, Operations):
     def local_mkdir(self, path, mode):
         global logger
         logger.log("INFO", "local_mkdir", path+", "+str(mode))
-        pass
+        parent = os.path.dirname(path)
+        if parent not in self.files:
+            logger.log("ERROR", "local_mkdir", parent+" does not exist")
+            return 1
+        else:
+            nlink = self.meta[parent]['st_nlink']
+            self.meta[path] = dict(st_mode=(S_IFDIR | mode), st_nlink=nlink+1, st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time(), location=[])
+            self.meta[parent]['st_nlink'] += 1
+            return 0
 
     def local_readdir(self, path, fh):
         global logger
@@ -489,6 +505,23 @@ class TCPClient():
                 connected = 1
                 logger.log("INFO", "TCPclient_init_port", "connected to "+ip+":"+str(port))
         return sock
+    
+    def init_server(self, host, port):
+        global logger
+        server = None
+        while server == None: 
+            try:
+                logger.log("INFO", "TCPclient_init_server", "starting server TCP socket")
+                server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                server.bind((host, port))
+                server.listen(5)
+            except socket.error as msg:
+                logger.log("ERROR", "TCPclient_init_server", msg)
+                server = None
+            else:
+                logger.log("INFO", "TCPclient_init_server", "server TCP socket started")
+                return server
 
     def sendpacket(self, packet):
         global logger
@@ -497,7 +530,7 @@ class TCPClient():
         logger.log("INFO", "TCPclient_sendpacket()", packet.path+" "+packet.op)
 
         #Packet sent to a single host
-        if len(packet.tlist) == 1:
+        if len(packet.tlist) > 0:
             try:
                 #initialize the socket
                 s = self.init_port(packet.tlist[0], 55000)            
@@ -552,308 +585,76 @@ class TCPClient():
                 logger.log("ERROR", "TCPclient_sendpacket()", "Other Exception: "+str(msg))
             finally:
                 return packet
-        
-    def sendall(self, path, msg):
+
+    def one_sided_sendpacket(self, packet, port):
         global logger
-        logger.log("INFO", "TCPclient_sendall", "broadcast "+path+"#"+msg+" to all servers")
-        size = 1024
-        retlist = []
-        for ip in slist:
-            try:
-                s = self.init(ip)            
-                s.send(bytes(path+'#'+msg, "utf8"))
-                ret = s.recv(size)
-                s.close()
-            except socket.error as msg:
-                logger.log("ERROR", "TCPclient_sendall", "Socket Exception: "+str(msg))
-            finally:
-                if msg == 'READDIR':
-                    retlist.extend(pickle.loads(ret))
-                elif msg == 'MKDIR':
-                    pass
-                else:
-                    pass
-        if msg == 'READDIR':
-            return retlist
-        elif msg == 'MKDIR':
-            return 0
-        else:
-            return 0
-
-
-class ALLTCPserver(threading.Thread):
-    def __init__(self, workerid, port, ramdisk):
-        threading.Thread.__init__(self)
-        self.id = workerid
-        self.host = ''
-        self.port = port
-        self.size = 1024
-        self.server = None
-        self.ramdisk = ramdisk
-
-    def init(self, ip, oport):
-        global logger
-        logger.log("INFO", "ALLTCPserver_init", "initializing connection to "+ip+": "+str(oport))
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        connected = 0
-        while connected == 0:
-            try:
-                sock.connect((ip, oport))
-            except socket.error:
-                logger.log("ERROR", "ALLTCPserver_init", "connect to " +ip+":"+str(oport)+" failed, try again")
-                sleep(0.1)
-                continue
-            finally:
-                connected = 1
-                logger.log("INFO", "ALLTCPserver_init", "initializing connected "+ip+": "+str(oport))
-        return sock
-
-    def open_socket(self):
-        global logger
-        try:
-            logger.log("INFO", "ALLTCPserver_open_socket", "starting server TCP socket")
-            self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.server.bind((self.host, self.port))
-            self.server.listen(5)
-        except socket.error as msg:
-            logger.log("ERROR", "ALLTCPserver_open_socket", msg)
-            self.server = None
-        else:
-            logger.log("INFO", "ALLTCPserver_open_socket", "server TCP socket started")
-
-    def run(self):
-        global logger
-        global ramdisk
         global localip
-        global slist
-        #global executor
-        global shuffleserver
-        global parentip
-        self.open_socket()
+        global ramdisk
+        logger.log("INFO", "TCPclient_one_sided_sendpacket()", packet.path+" "+packet.op)
+
+        #Packet sent to a single host
+        if len(packet.tlist) > 0:
+            try:
+                #initialize the socket
+                s = self.init_port(packet.tlist[0], port)            
+
+                #dump packet into binary format
+                bpacket = pickle.dumps(packet)
+
+                #get the packet size
+                length = len(bpacket)
+                logger.log("INFO", "TCPclient.one_sided_sendpacket()", "ready to send "+str(length)+" bytes")
+
+                #paddling the length of the packet to a 16 bytes number
+                slength = str(length)
+                while len(slength) < self.psize:
+                    slength = slength + '\0'
+
+                #send the length, and wait for an ack    
+                s.send(bytes(slength, 'utf-8'))
+                s.recv(1)
+            
+                #send the bpacket data
+                sent = 0
+                while sent < length:
+                    if length - sent > self.bufsize:
+                        sent_iter = s.send(bpacket[sent:sent+self.bufsize])
+                    else:
+                        sent_iter = s.send(bpacket[sent:])
+                    sent = sent + sent_iter
+                    logger.log("INFO", "TCPclient.one_sided_sendpacket()", "send "+str(sent_iter)+" bytes")
+                logger.log("INFO", "TCPclient.one_sided_sendpacket()", "totally send "+str(sent)+" bytes")    
+
         
-        while True:
-            conn, addr = self.server.accept()
-            peer = conn.getpeername()[0]
-            try:
-                #data = b''
-                #while len(data) == 0:
-                data = conn.recv(self.size)
-            except socket.error:
-                logger.log("ERROR", "ALLTCPserver_run", "socket exception: "+str(socket.error))
-                break
-            msg = data.decode("utf8").strip()
-            logger.log("INFO", "ALLTCPserver_run", "received: "+str(msg))
-            el = msg.split('#')
-            if el[1] == 'READDIR':
-                retlist = []
-                retdict = dict()
-                path = el[0]
-                lsize = int(el[2])
-                conn.send(bytes(str(0), "utf8"))
-                temp = b''
-                while len(temp) < lsize:
-                    data = conn.recv(self.size)
-                    temp = temp + data 
-                plist = pickle.loads(temp)
-                conn.send(bytes(str(0), "utf8"))
-                conn.close()
-
-                if len(plist) == 0:
-                    metadict = ramdisk.local_readdir(path, 0)
-                elif len(plist) > 0:
-                    alltcpclient = ALLTCPclient()
-                    retdict = alltcpclient.sendall(path, 'READDIR', plist)
-                    metadict = ramdisk.local_readdir(path, 0)
-
-                retdict.update(metadict)
-                sock = self.init(peer, 55002)
-                psize = str(len(pickle.dumps(retdict)))
-                while len(psize) < 10:
-                    psize = psize + '\0'
-                sock.send(bytes(psize, "utf8"))
-                sock.send(pickle.dumps(retdict))
-                sock.close()
-
-            elif el[1] == 'MKDIR':
-                path = el[0]
-                mode = int(el[2])
-                lsize = int(el[3])
-                conn.send(bytes(str(0), "utf8"))
-                temp = b''
-                while len(temp) < lsize:
-                    data = conn.recv(self.size)
-                    temp = temp + data 
-                plist = pickle.loads(temp)
-                conn.send(bytes(str(0), "utf8"))
-                conn.close()
-
-                if len(plist) == 0:
-                    ramdisk.local_mkdir(path, mode)
-                elif len(plist) > 0:
-                    alltcpclient = ALLTCPclient()
-                    recv = alltcpclient.sendall(path, 'MKDIR#'+str(mode), plist)
-                    ramdisk.local_mkdir(path, mode)
-                sock = self.init(peer, 55002)
-                sock.send(bytes(str(1)+"\0\0\0\0\0\0\0\0\0", "utf8"))
-                sock.send(bytes(str(0), "utf8"))
-                sock.close()
-                
-            elif el[1] == 'RMDIR':
-                path = el[0]
-                lsize = int(el[2])
-                conn.send(bytes(str(0), "utf8"))
-                temp = b''
-                while len(temp) < lsize:
-                    data = conn.recv(self.size)
-                    temp = temp + data 
-                plist = pickle.loads(temp)
-                conn.send(bytes(str(0), "utf8"))
-                conn.close()
-
-                if len(plist) == 0:
-                    ramdisk.local_rmdir(path)
-                elif len(plist) > 0:
-                    alltcpclient = ALLTCPclient()
-                    recv = alltcpclient.sendall(path, 'RMDIR', plist)
-                    ramdisk.local_rmdir(path)
-                sock = self.init(peer, 55002)
-                sock.send(bytes(str(1)+"\0\0\0\0\0\0\0\0\0", "utf8"))
-                sock.send(bytes(str(0), "utf8"))
-                sock.close()
-
-            elif el[1] == 'MULTI':
-                pass
-            elif el[1] == 'ALLGATHER':
-                pass
-            elif el[1] == 'GATHER':
-                pass
-            elif el[1] == 'SCATTER':
-                pass
-            elif el[1] == 'LOAD':
-                pass
-            elif el[1] == 'DUMP':
-                pass
-            elif el[1] == 'SHUFFLE':
-                pass
-            elif el[1] == 'DISPATCH':
-                pass
-            elif el[1] == 'STATE':
-                pass
-
-class ALLTCPclient():
-    def init(self, ip):
+    def sendallpacket(self, packet):
         global logger
-        logger.log("INFO", "ALLTCPclient_init", "connect to "+ip)
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        port = 55001
-        connected = 0
-        while connected == 0:
-            try:
-                sock.connect((ip, port))
-            except socket.error:
-                logger.log("ERROR", "ALLTCPclient_init", "connection to "+ip+":"+str(port)+" failed")
-                sleep(1)
-                continue
-            else:
-                connected = 1
-        return sock
+        global misc
+        logger.log("INFO", "TCPclient_sendallpacket", packet.op+" "+packet.path)
+        #partition the target list in the packet to reorganize the nodes into an MST
+        #The current implementation of partition_list() is MST
+        #SEQ algorithm can be implemented by modifying the code in partition_list()
+        olist = misc.partition_list(packet.tlist)
+        #start an asynchronous server to receive acknowledgements of collective operations
+        server = self.init_server('', 55001)
+        #rdict tracks the immediate children of this node
+        #initiate the status of each node, 0 means not returned,
+        #1 means returned
+        rdict = dict()
+        for ol in olist:
+            dict[ol[0]] = 0
+
+        colthread = CollectiveThread(server, rdict, packet)
+        while not colthread.is_alive():
+            colthread.start()
+        for ol in olist:    
+            op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, packet.misc)
+            self.one_sided_sendpacket(op, 55000)
+        
+        while colthread.is_alive():
+            sleep(1)
+            logger.log("INFO", "TCPclient_sendallpacket()", "waiting for colthread to finish")
+        return packet    
     
-    def init_server(self):
-        global logger
-        logger.log("INFO", "ALLTCPclient_init_server", "initializing server to receive acks")
-        ip = ''
-        port = 55002
-        started = 0
-        while started == 0:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                sock.bind((ip, port))
-                sock.listen(5)
-            except socket.error as msg:
-                logger.log("ERROR", "ALLTCPclient_init_server", str(msg))
-                sleep(1)
-                continue
-            else:
-                started = 1
-                logger.log("INFO", "ALLTCPclient_init_server", "server started")
-        return sock
-
-    def sendall(self, path, msg, slist):
-        global logger
-        logger.log("INFO", "ALLTCPclient_sendall", "sending "+msg+" to all servers: "+str(len(slist)))
-
-        global localip
-        global ramdisk
-        targetlist = list(slist)
-        if localip in targetlist:
-            targetlist.remove(localip)
-        plist = []
-        pmap = dict() #ip as key, value:1-returned, 0-pending
-        size = 8192
-        retlist = []
-        retdict = dict()
-        while len(targetlist) > 0:
-            templist = []
-            for i in range(int(len(targetlist)/2)+1):
-                ip = targetlist.pop()
-                templist.append(ip)
-            plist.append(templist)
-        logger.log("INFO", "ALLTCPclient_sendall", "list partition: "+str(plist))
-        for l in plist:
-            pmap[l[0]] = 0
-        #start ALLTCPreceiver here waiting for len(plist) acks
-        if len(pmap.keys()) > 0:
-            server=self.init_server()
-            sendallthread = Sendallthread(server, pmap, retdict, msg)
-            if not sendallthread.is_alive():
-                sendallthread.start()
-
-        
-            for l in plist:
-                ip = l[0]
-                l.remove(ip)
-                try:
-                    s=self.init(ip)
-                    s.send(bytes(path+'#'+msg+'#'+str(len(pickle.dumps(l))), "utf8"))
-                    ret = s.recv(size)
-                    s.send(pickle.dumps(l))
-                    ret = s.recv(size)
-                    s.close()
-                except socket.error as msg:
-                    logger.log("ERROR", "ALLTCPclient_sendall", msg)
-                else:
-                    logger.log("INFO", "ALLTCPclient_sendall", "send "+msg+" to "+ip+" list: "+str(l))
-
-            while sendallthread.is_alive():
-                sleep(0.1)
-                logger.log("INFO", "ALLTCPclient_sendall", "waiting for sendallthread to finish")
-            logger.log("INFO", "ALLTCPclient_sendall", "sendallthread finsihed")
-
-        if msg == 'READDIR':
-            return retdict
-        else:
-            return 0
-
-    def multicast(self, path, mode, slist, algo, odict):
-        pass
-    def allgather(self, path, slist, algo, flist):
-        pass
-    def gather(self, path, slist, algo):
-        pass
-    def scatter(self, path, slist, algo, mdict, ddict):
-        pass
-    def shuffle(self, path, dst, slist, metadict, algo):
-        pass
-    def dispatch(self, slist, tlist):
-        pass
-    def state(self, slist):
-        pass
-    def load(self, src, slist, flist, dst, algo):
-        pass
-    def dump(self, src, slist, fdict, dst, algo):
-        pass
 
 class TCPserver(threading.Thread):
     def __init__(self, workerid, port):
@@ -1036,11 +837,13 @@ class TCPworker(threading.Thread):
                 conn.send(pickle.dumps(ret))
                 conn.close()
             elif packet.op == 'MKDIR':
-                path = el[0]
-                mode = int(el[2])
-                ramdisk.local_mkdir(path, mode)
-                conn.send(bytes(str(0), "utf8"))
-                conn.close()
+                path = packet.path
+                mode = packet.mode
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendallpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "MKDIR", "creating dir: "+path+" failed")
+                tcpclient.one_sided_sendpacket(rpacket, 55001)    
             elif packet.op == 'UNLINK':
                 path = el[0]
                 ret = ramdisk.files[path]
@@ -1211,62 +1014,86 @@ Class Interfaceserver(threading.Thread):
 class Misc():
     def __init__(self):
         pass
+
     def findserver(self, fname):
         global slist
         value = zlib.adler32(bytes(fname, 'utf8')) & 0xffffffff
         return slist[value%(len(slist))]
+
     def hash(self, fname):
         return zlib.adler32(bytes(fname, 'utf8')) & 0xffffffff
 
-class Sendallthread(threading.Thread):
-    def __init__(self, server, pmap, retdict, msg):
+    def partition_list(self, slist):
+        tlist = []
+        global localip
+        tlist.remove(localip)
+        while len(slist) > 0:
+            temp = []
+            for i in range(int(len(targetlist)/2)+1):
+                ip = slist.pop()
+                temp.append(ip)
+            tlist.append(temp)    
+        return tlist
+
+class CollectiveThread(threading.Thread):
+    def __init__(self, server, retdict, packet):
         threading.Thread.__init__(self)
         self.server = server
-        self.pmap = pmap
         self.retdict = retdict
-        self.msg = msg
-        
-    def run(self):
-        size = 1024
-        global logger
-        logger.log("INFO", "Sendallthread_run", "multicastthread thread started")
+        self.packet = packet
+        self.buf_size = 1048576
+        self.psize = 16
 
+    def run(self):
+        global logger
+        global localip
+        global amfora
+        logger.log("INFO", "CollThread_run()", "thread started")
         while True:
-            summ=0
-            for k in self.pmap:
-                summ = summ + self.pmap[k]
+            #return if all immediate childrens return
+            summ = sum(self.retdict().values())
             if summ == len(self.pmap):
                 break
-            conn, addr = self.server.accept()
-            try:
-                peer = conn.getpeername()[0]
-                ret = conn.recv(10)
-                msize = int(ret.decode("utf8").strip('\0'))
 
-                if self.msg.split('#')[0] == 'READDIR':
-                    temp = b''
-                    while len(temp) < msize:
-                        data = conn.recv(size)
-                        temp = temp+data                
-                    self.retdict.update(pickle.loads(temp))
-                    logger.log("INFO", "Sendallthread", "recv ack for READDIR from "+str(conn.getpeername()))
-                elif self.msg.split('#')[0] == 'MKDIR':
-                    data = conn.recv(msize)
-                    logger.log("INFO", "Sendallthread", "recv ack for MKDIR from "+str(conn.getpeername()))
-                elif self.msg.split('#')[0] == 'RMDIR':
-                    data = conn.recv(msize)
-                    logger.log("INFO", "Sendallthread", "recv ack for RKDIR from "+str(conn.getpeername()))
-                else:
-                    data = conn.recv(msize)
-                    logger.log("INFO", "Sendallthread", "recv ack for SHUFFLE from "+str(conn.getpeername()))
+            #if this is the leaf node
+            if len(self.packet.tlist)==1 and self.packet.tlist[0]==localip:
+                pass
+            else:
+                conn, addr = self.server.accept()
+                try:
+                    peer = conn.getpeername()[0]
+                    data = conn.recv(self.psize)
+                    length = int(data.decode('utf8').strip('\0'))
+                    logger.log("INFO", "CollThread_run()", "ready to receive "+str(length)+" bytes")
+                    s.send(bytes('0', 'utf8'))
+                    data = b''
+                    rect = 0
+                    while rect < length:
+                        if length - rect > self.bufsize:
+                            temp = s.recv(self.bufsize)
+                        else:
+                            temp = s.recv(length-rect)
+                        rect = rect + len(temp)
+                        data = data + temp
+                        logger.log("INFO", "CollThread_run()", "receive "+str(len(temp))+" bytes")
+                    logger.log("INFO", "CollThread_run()", "totally receive "+str(len(data))+" bytes")    
+                    conn.close()
+                    packet = pickle.loads(data)
+                except socket.error as msg:
+                    logger.log("ERROR", "CollThread_run()", "Socket Exception: "+str(msg))
+                except Exception as msg:
+                    logger.log("ERROR", "CollThread_run()", "Other Exception: "+str(msg))
+                finally:
+                    pass
                 self.pmap[peer] = 1
-            except socket.error as msgg:
-                logger.log("ERROR", "Sendallthread", "socket exception: "+str(msgg))
-            except Exception as msgg:
-                logger.log("ERROR", "Sendallthread", "other exception: "+str(msgg))
-        self.server.close()
-        logger.log("INFO", "Sendallthread_run", "multicastthread thread finished")
 
+            if packet.op == "MKDIR":
+                ret = amfora.local_mkdir(packet.path, packet.misc)
+                #mkdir raises FuseOSError(ENOENT) if parent dir does not exist
+                packet.ret = ret
+            else:
+                logger.log("ERROR", "CollThread_run()", "operation: "+packet.op+" not supported")
+    
 class Packet():
     def __init__(self, path, op, meta, data, ret, tlist, misc):
         '''
