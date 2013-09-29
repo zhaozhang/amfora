@@ -195,11 +195,19 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global slist
         logger.log("INFO", "MKDIR", path+", "+str(mode))
-        packet = Packet(path, "MKDIR", None, None, None, slist, mode)
-        tcpclient = TCPClient()
-        rpacket = tcpclient.sendallpacket(packet)
-        if rpacket.ret != 0:
-            logger.log("ERROR", "MKDIR", "creating dir: "+path+" failed")
+        parent = os.path.dirname(path)
+        if parent not in self.meta:
+            logger.log("ERROR", "MKDIR", parent+" does not exist")
+            raise FuseOSError(ENOENT) 
+        else:
+            packet = Packet(path, "MKDIR", {}, {}, 0, slist, mode)
+            tcpclient = TCPClient()
+            rpacket = tcpclient.sendallpacket(packet)
+            if rpacket.ret != 0:
+                logger.log("ERROR", "MKDIR", "creating dir: "+path+" failed")
+                raise FuseOSError(ENOENT) 
+            else:
+                self.local_mkdir(path, mode)
 
     def open(self, path, flags):
         global logger
@@ -219,7 +227,7 @@ class Amfora(LoggingMixIn, Operations):
         else:
             ip = self.meta[path]['location']
             logger.log("INFO", "READ", "read sent to remote server "+path+" "+ip)
-            packet = Packet(path, "READ", None, None, None, [ip], [size, offset])
+            packet = Packet(path, "READ", {}, {}, 0, [ip], [size, offset])
             tcpclient = TCPClient()
             rpacket = tcpclient.sendpacket(packet)
             if not rpacket.data:
@@ -231,9 +239,25 @@ class Amfora(LoggingMixIn, Operations):
 
     def readdir(self, path, fh):
         global logger
+        global slist
         logger.log("INFO", "readdir", path)
-        pass
-
+        if path not in self.meta:
+            logger.log("ERROR", "READDIR", path+" does not exist")
+            return FuseOSError(ENOENT)
+        else:
+            packet = Packet(path, "READDIR", {}, {}, 0, slist, fh)
+            tcpclient = TCPClient()
+            rpacket = tcpclient.sendallpacket(packet)
+            self.meta.update(packet.meta)
+            #filtering local metadata in the parent dir of path
+            rlist = ['.', '..']
+            print(self.meta.keys())
+            for m in self.meta:
+                if m != '/' and path == os.path.dirname(m):
+                    b = os.path.basename(m)
+                    rlist.append(b)
+            return rlist
+        
     def readlink(self, path):
         global logger
         logger.log("INFO", "readlink", path)
@@ -385,7 +409,7 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         logger.log("INFO", "local_mkdir", path+", "+str(mode))
         parent = os.path.dirname(path)
-        if parent not in self.files:
+        if parent not in self.meta:
             logger.log("ERROR", "local_mkdir", parent+" does not exist")
             return 1
         else:
@@ -397,7 +421,11 @@ class Amfora(LoggingMixIn, Operations):
     def local_readdir(self, path, fh):
         global logger
         logger.log("INFO", "local_readdir", path)
-        pass
+        rdict = dict()
+        for m in self.meta:
+            if path == os.path.dirname(m) and not S_ISDIR(self.meta[m]['st_mode']):
+                rdict[m] = self.meta[m]
+        return rdict        
 
     def local_readlink(self, path):
         global logger
@@ -624,6 +652,10 @@ class TCPClient():
                     sent = sent + sent_iter
                     logger.log("INFO", "TCPclient.one_sided_sendpacket()", "send "+str(sent_iter)+" bytes")
                 logger.log("INFO", "TCPclient.one_sided_sendpacket()", "totally send "+str(sent)+" bytes")    
+            except socket.error as msg:
+                logger.log("ERROR", "TCPclient.one_sided_sendpacket()", "Socket Exception: "+str(msg))
+            except Exception as msg:
+                logger.log("ERROR", "TCPclient.one_sided_sendpacket()", "Other Exception: "+str(msg))
 
         
     def sendallpacket(self, packet):
@@ -635,17 +667,21 @@ class TCPClient():
         #SEQ algorithm can be implemented by modifying the code in partition_list()
         olist = misc.partition_list(packet.tlist)
         #start an asynchronous server to receive acknowledgements of collective operations
-        server = self.init_server('', 55001)
+        logger.log("INFO", "TCPClient_sendallpacket", "num_targets: "+str(len(olist)))
+        if len(olist) > 0:
+            server = self.init_server('', 55001)
+        else:
+            server=None
         #rdict tracks the immediate children of this node
         #initiate the status of each node, 0 means not returned,
         #1 means returned
         rdict = dict()
         for ol in olist:
-            dict[ol[0]] = 0
+            rdict[ol[0]] = 0
 
         colthread = CollectiveThread(server, rdict, packet)
-        while not colthread.is_alive():
-            colthread.start()
+        colthread.start()
+
         for ol in olist:    
             op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, packet.misc)
             self.one_sided_sendpacket(op, 55000)
@@ -781,6 +817,7 @@ class TCPworker(threading.Thread):
                 conn.close()
             elif packet.op == 'READ':
                 filename = packet.path
+                remoteip, remoteport = conn.getpeername()
                 ret = amfora.local_read(filename, packet.misc[0], packet.misc[1])
                 p = Packet(packet.path, packet.op, None, ret, 0, [remoteip], None)
                 self.sendpacket(conn, p)
@@ -832,18 +869,28 @@ class TCPworker(threading.Thread):
                 conn.send(bytes(str(0), "utf8"))
                 conn.close()
             elif packet.op == 'READDIR':
-                path = el[0]
-                ret = ramdisk.local_readdir(path, 0)
-                conn.send(pickle.dumps(ret))
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendallpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "READDIR", "reading dir: "+path+" failed")
+                rpacket.tlist = [remoteip]    
+                tcpclient.one_sided_sendpacket(rpacket, 55001)    
+
                 conn.close()
             elif packet.op == 'MKDIR':
                 path = packet.path
-                mode = packet.mode
+                mode = packet.misc
+                remoteip, remoteport = conn.getpeername()
                 tcpclient = TCPClient()
                 rpacket = tcpclient.sendallpacket(packet)
                 if rpacket.ret != 0:
                     logger.log("ERROR", "MKDIR", "creating dir: "+path+" failed")
+                rpacket.tlist = [remoteip]    
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
+                conn.close()
+
             elif packet.op == 'UNLINK':
                 path = el[0]
                 ret = ramdisk.files[path]
@@ -1026,22 +1073,23 @@ class Misc():
     def partition_list(self, slist):
         tlist = []
         global localip
-        tlist.remove(localip)
-        while len(slist) > 0:
+        vlist = list(slist)
+        vlist.remove(localip)
+        while len(vlist) > 0:
             temp = []
-            for i in range(int(len(targetlist)/2)+1):
-                ip = slist.pop()
+            for i in range(int(len(vlist)/2)+1):
+                ip = vlist.pop()
                 temp.append(ip)
             tlist.append(temp)    
         return tlist
 
 class CollectiveThread(threading.Thread):
-    def __init__(self, server, retdict, packet):
+    def __init__(self, server, rdict, packet):
         threading.Thread.__init__(self)
         self.server = server
-        self.retdict = retdict
+        self.rdict = rdict
         self.packet = packet
-        self.buf_size = 1048576
+        self.bufsize = 1048576
         self.psize = 16
 
     def run(self):
@@ -1051,13 +1099,14 @@ class CollectiveThread(threading.Thread):
         logger.log("INFO", "CollThread_run()", "thread started")
         while True:
             #return if all immediate childrens return
-            summ = sum(self.retdict().values())
-            if summ == len(self.pmap):
+            summ = sum(self.rdict.values())
+            if summ == len(self.rdict):
                 break
 
             #if this is the leaf node
-            if len(self.packet.tlist)==1 and self.packet.tlist[0]==localip:
-                pass
+            #the above code can check leaf too
+            #if len(self.packet.tlist)==1 and self.packet.tlist[0]==localip:
+            #    pass
             else:
                 conn, addr = self.server.accept()
                 try:
@@ -1065,34 +1114,43 @@ class CollectiveThread(threading.Thread):
                     data = conn.recv(self.psize)
                     length = int(data.decode('utf8').strip('\0'))
                     logger.log("INFO", "CollThread_run()", "ready to receive "+str(length)+" bytes")
-                    s.send(bytes('0', 'utf8'))
+                    conn.send(bytes('0', 'utf8'))
                     data = b''
                     rect = 0
                     while rect < length:
                         if length - rect > self.bufsize:
-                            temp = s.recv(self.bufsize)
+                            temp = conn.recv(self.bufsize)
                         else:
-                            temp = s.recv(length-rect)
+                            temp = conn.recv(length-rect)
                         rect = rect + len(temp)
                         data = data + temp
                         logger.log("INFO", "CollThread_run()", "receive "+str(len(temp))+" bytes")
                     logger.log("INFO", "CollThread_run()", "totally receive "+str(len(data))+" bytes")    
                     conn.close()
-                    packet = pickle.loads(data)
+                    tp = pickle.loads(data)
+                    self.packet.meta.update(tp.meta)
+                    self.packet.data.update(tp.data)
+                    self.packet.ret = self.packet.ret | tp.ret
                 except socket.error as msg:
                     logger.log("ERROR", "CollThread_run()", "Socket Exception: "+str(msg))
                 except Exception as msg:
                     logger.log("ERROR", "CollThread_run()", "Other Exception: "+str(msg))
                 finally:
-                    pass
-                self.pmap[peer] = 1
+                    conn.close()
+                    self.rdict[peer] = 1
 
-            if packet.op == "MKDIR":
-                ret = amfora.local_mkdir(packet.path, packet.misc)
-                #mkdir raises FuseOSError(ENOENT) if parent dir does not exist
-                packet.ret = ret
-            else:
-                logger.log("ERROR", "CollThread_run()", "operation: "+packet.op+" not supported")
+        if self.packet.op == "MKDIR":
+            ret = amfora.local_mkdir(self.packet.path, self.packet.misc)
+            #mkdir raises FuseOSError(ENOENT) if parent dir does not exist
+            self.packet.ret = self.packet.ret | ret
+            logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
+        elif self.packet.op == "READDIR":
+            ret = amfora.local_readdir(self.packet.path, self.packet.misc)
+            self.packet.meta.update(ret)
+            self.packet.ret = self.packet.ret | 0
+            logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
+        else:
+            logger.log("ERROR", "CollThread_run()", "operation: "+self.packet.op+" not supported")
     
 class Packet():
     def __init__(self, path, op, meta, data, ret, tlist, misc):
