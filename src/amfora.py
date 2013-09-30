@@ -58,7 +58,7 @@ class Amfora(LoggingMixIn, Operations):
         #initializing the root directory
         now = time()
         self.meta['/'] = dict(st_mode=(S_IFDIR | 0o755), st_ctime=now,
-                               st_mtime=now, st_atime=now, st_nlink=2, location=[])
+                               st_mtime=now, st_atime=now, st_nlink=2, location=[], key=None)
 
         #data entry for potential shuffle operation
         self.shuffledict = defaultdict(bytes)
@@ -74,6 +74,10 @@ class Amfora(LoggingMixIn, Operations):
         tcpclient = TCPClient()
         apath = path[len(mountpoint):]
         logger.log("INFO", "MULTICAST", "multicast "+path+" "+apath)
+        
+        if path[:len(mountpoint)] != mountpoint:
+            logger.log("ERROR", "MULTICAST", path[:len(mountpoint)]+" is not the mountpoint")
+            return 1
 
         #if the meta data is not local, copy it to local meta data
         if apath not in self.meta:
@@ -103,10 +107,42 @@ class Amfora(LoggingMixIn, Operations):
 
     def allgather(self, path, algo):
         pass
-    def allgather_old(self, path, algo):
-        pass
+
     def gather(self, path, algo):
-        pass
+        global logger
+        global slist
+        global mountpoint
+        global misc
+        tcpclient = TCPClient()
+        apath = path[len(mountpoint):]
+        logger.log("INFO", "GATHER", "gather "+path+" "+apath)
+        
+        if path[:len(mountpoint)] != mountpoint:
+            logger.log("ERROR", "GATHER", path[:len(mountpoint)]+" is not the mountpint")
+            return 1, None
+        if path == mountpoint:
+            apath = '/'
+        if not S_ISDIR(self.meta[apath]['st_mode']):
+            logger.log("ERROR", "GATHER", apath+" is not a directory")
+            return 1, None
+        #readdir to get the metadata
+        packet = Packet(apath, "READDIR", {}, {}, 0, slist, 0)
+        rpacket = tcpclient.sendallpacket(packet)
+        gdict = dict()
+        for m in rpacket.meta:
+            if rpacket.meta[m]['location'] not in gdict:
+                gdict[rpacket.meta[m]['location']] = []
+            gdict[rpacket.meta[m]['location']].append(rpacket.meta[m]['key'])
+        self.meta.update(rpacket.meta)    
+        packet = Packet(apath, "GATHER", {}, {}, 0, slist, gdict)    
+        rpacket = tcpclient.sendallpacket(packet)
+        if rpacket.ret != 0:
+            logger.log("ERROR", "GATHER", "gather "+path+" failed")
+        else:
+            self.data.update(rpacket.data)
+            logger.log("INFO", "GATHER", "gather "+path+" finished")
+            return 0, rpacket.data
+
     def scatter(self, path, algo):
         pass
     def shuffle(self, path, algo, dst):
@@ -150,7 +186,7 @@ class Amfora(LoggingMixIn, Operations):
         logger.log("INFO", "CREATE", path+", "+str(mode))
         self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
                                      st_size=0, st_ctime=time(), st_mtime=time(), 
-                                     st_atime=time(), location=localip)
+                                     st_atime=time(), location=localip, key=misc.hash(path))
         hvalue = misc.hash(path)
         self.cdata[hvalue]=b'' 
         self.fd += 1
@@ -479,7 +515,7 @@ class Amfora(LoggingMixIn, Operations):
             return 1
         else:
             nlink = self.meta[parent]['st_nlink']
-            self.meta[path] = dict(st_mode=(S_IFDIR | mode), st_nlink=nlink+1, st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time(), location=[])
+            self.meta[path] = dict(st_mode=(S_IFDIR | mode), st_nlink=nlink+1, st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time(), location=[], key=None)
             self.meta[parent]['st_nlink'] += 1
             return 0
 
@@ -696,7 +732,7 @@ class TCPClient():
     def one_sided_sendpacket(self, packet, port):
         global logger
         global localip
-        global ramdisk
+        global amfora
         logger.log("INFO", "TCPclient_one_sided_sendpacket()", packet.path+" "+packet.op)
 
         #Packet sent to a single host
@@ -796,7 +832,7 @@ class TCPserver(threading.Thread):
 
     def run(self):
         global logger
-        global ramdisk
+        global amfora
         global tcpqueue
         global localip
         self.open_socket()
@@ -1049,6 +1085,16 @@ class TCPworker(threading.Thread):
                 rpacket.tlist = [remoteip]    
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
                 conn.close()
+            elif packet.op == 'GATHER':
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendallpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "GATHER", "gathering dir: "+path+" failed")
+                rpacket.tlist = [remoteip]    
+                tcpclient.one_sided_sendpacket(rpacket, 55001)    
+                conn.close()
 
             else:
                 logger.log("ERROR", "TCPserver.run()", "Invalid op "+packet.op)
@@ -1099,7 +1145,7 @@ class Interfaceserver(threading.Thread):
             elif el[1] == 'GATHER':
                 path = el[0]
                 algo = el[2]
-                ret, retdict = ramdisk.gather(path, algo)
+                ret, retdict = amfora.gather(path, algo)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
             elif el[1] == 'ALLGATHER':
@@ -1250,6 +1296,12 @@ class CollectiveThread(threading.Thread):
         elif self.packet.op == "MULTICAST":
             amfora.meta.update(self.packet.meta)
             amfora.data.update(self.packet.data)
+            self.packet.ret = self.packet.ret | 0
+            logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
+        elif self.packet.op == "GATHER":
+            if localip in self.packet.misc:
+                for k in self.packet.misc[localip]:
+                    self.packet.data[k] = amfora.data[k]
             self.packet.ret = self.packet.ret | 0
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         else:
