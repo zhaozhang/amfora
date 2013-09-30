@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.1
+#!/usr/bin/env python3
 ##!/home/zhaozhang/workplace/python/bin/python3.3
 import logging
 
@@ -42,7 +42,7 @@ class TCPclient():
         global logger
         logger.log("INFO", "TCPclient_init", "connet to "+ip)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        port = 55010
+        port = 55002
         connected = 0
         while connected == 0:
             try:

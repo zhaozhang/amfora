@@ -67,7 +67,40 @@ class Amfora(LoggingMixIn, Operations):
     below are collective interface
     '''
     def multicast(self, path, algo):
-        pass
+        global logger
+        global slist
+        global mountpoint
+        global misc
+        tcpclient = TCPClient()
+        apath = path[len(mountpoint):]
+        logger.log("INFO", "MULTICAST", "multicast "+path+" "+apath)
+
+        #if the meta data is not local, copy it to local meta data
+        if apath not in self.meta:
+            self.meta[apath] = self.getattr(apath, None)
+        #if the file data is not local, copy it to local storage first
+        hvalue = misc.hash(apath)
+        if hvalue not in self.data:
+            ip = self.meta[apath]['location']
+            logger.log("INFO", "READ", "read sent to remote server "+apath+" "+ip)
+            packet = Packet(apath, "READ", {}, {}, 0, [ip], [0,0])
+            
+            rpacket = tcpclient.sendpacket(packet)
+            if not rpacket.data:
+                logger.log("ERROR", "READ", "remote read on "+path+" failed on "+ip)
+            else:
+                self.data[hvalue] = rpacket.data[hvalue]
+        #assembe the multicast packet
+        ddict = dict()
+        ddict[hvalue] = self.data[hvalue]
+        mdict = dict()
+        mdict[apath] = self.meta[apath]
+        packet=Packet(apath, "MULTICAST", mdict, ddict, 0, slist, None)
+        rpacket = tcpclient.sendallpacket(packet)
+        if rpacket.ret != 0:
+            logger.log("ERROR", "MULTICAST", "multicasting file: "+apath+" failed")
+        return rpacket.ret
+
     def allgather(self, path, algo):
         pass
     def allgather_old(self, path, algo):
@@ -278,6 +311,9 @@ class Amfora(LoggingMixIn, Operations):
         pass
 
     def rmdir(self, path):
+        #rmdir is a two step procedure
+        #Step 1, remove the dir path and return the file meta within
+        #Step 2, remove all file data on all nodes
         global logger
         logger.log("INFO", "rmdir", path)
         pass
@@ -597,7 +633,7 @@ class TCPClient():
     def sendpacket(self, packet):
         global logger
         global localip
-        global ramdisk
+        global amfora
         logger.log("INFO", "TCPclient_sendpacket()", packet.path+" "+packet.op)
 
         #Packet sent to a single host
@@ -923,7 +959,6 @@ class TCPworker(threading.Thread):
                     logger.log("ERROR", "READDIR", "reading dir: "+path+" failed")
                 rpacket.tlist = [remoteip]    
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
-
                 conn.close()
             elif packet.op == 'MKDIR':
                 path = packet.path
@@ -936,7 +971,6 @@ class TCPworker(threading.Thread):
                 rpacket.tlist = [remoteip]    
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
                 conn.close()
-
             elif packet.op == 'UNLINK':
                 path = packet.path
                 remoteip, remoteport = conn.getpeername()
@@ -1005,10 +1039,21 @@ class TCPworker(threading.Thread):
                 ret = ramdisk.local_updatelocation(path, meta)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
+            elif packet.op == 'MULTICAST':
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendallpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "MULTICAST", "multicasting file: "+path+" failed")
+                rpacket.tlist = [remoteip]    
+                tcpclient.one_sided_sendpacket(rpacket, 55001)    
+                conn.close()
+
             else:
                 logger.log("ERROR", "TCPserver.run()", "Invalid op "+packet.op)
-'''
-Class Interfaceserver(threading.Thread):
+
+class Interfaceserver(threading.Thread):
     def __init__(self, workerid, port):
         threading.Thread.__init__(self)
         self.id = workerid
@@ -1030,7 +1075,7 @@ Class Interfaceserver(threading.Thread):
 
     def run(self):
         global logger
-        global ramdisk
+        global amfora
         #global executor
         self.open_socket()
         
@@ -1048,7 +1093,7 @@ Class Interfaceserver(threading.Thread):
             if el[1] == 'MULTI':
                 path = el[0]
                 algo = el[2]
-                ret = ramdisk.multicast(path, algo)
+                ret = amfora.multicast(path, algo)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
             elif el[1] == 'GATHER':
@@ -1109,7 +1154,7 @@ Class Interfaceserver(threading.Thread):
                 ret = ramdisk.dump(src, dst)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
-'''
+
 
 class Misc():
     def __init__(self):
@@ -1200,6 +1245,11 @@ class CollectiveThread(threading.Thread):
         elif self.packet.op == "READDIR":
             ret = amfora.local_readdir(self.packet.path, self.packet.misc)
             self.packet.meta.update(ret)
+            self.packet.ret = self.packet.ret | 0
+            logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
+        elif self.packet.op == "MULTICAST":
+            amfora.meta.update(self.packet.meta)
+            amfora.data.update(self.packet.data)
             self.packet.ret = self.packet.ret | 0
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         else:
@@ -1344,13 +1394,13 @@ if __name__ == '__main__':
     while not tcpworker.is_alive():
         tcpworker.start()
 
-    #interfaceserver = Interfaceserver('Interfaceserver', 55010)
-    #while not interfaceserver.is_alive():
-    #    interfaceserver.start()
+    interfaceserver = Interfaceserver('Interfaceserver', 55002)
+    while not interfaceserver.is_alive():
+        interfaceserver.start()
         
     #alltcpserver = ALLTCPserver('ALLTCPserver', 55001, ramdisk)
     #while not alltcpserver.is_alive():
     #    alltcpserver.start()
 
-    fuse = FUSE(amfora, argv[1], foreground=True, big_writes=True, direct_io=True)
+    fuse = FUSE(amfora, mountpoint, foreground=True, big_writes=True, direct_io=True)
 
