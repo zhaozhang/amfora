@@ -248,10 +248,10 @@ class Amfora(LoggingMixIn, Operations):
             packet = Packet(path, "READDIR", {}, {}, 0, slist, fh)
             tcpclient = TCPClient()
             rpacket = tcpclient.sendallpacket(packet)
-            self.meta.update(packet.meta)
+            self.meta.update(rpacket.meta)
             #filtering local metadata in the parent dir of path
             rlist = ['.', '..']
-            print(self.meta.keys())
+            #print(self.meta.keys())
             for m in self.meta:
                 if m != '/' and path == os.path.dirname(m):
                     b = os.path.basename(m)
@@ -314,10 +314,39 @@ class Amfora(LoggingMixIn, Operations):
             #    logger.log("ERROR", "truncate", "failed on "+path+" with length: "+str(length))
 
     def unlink(self, path):
+        #Unlink is not well funcitoning for the moment
         global logger
-        logger.log("INFO", "unlink", path)
-        pass
-        
+        global misc
+        logger.log("INFO", "UNLINK", path)
+        #unlink is a two step procedure, first, we need to find the metadata of this file then remove the meta
+        #second, clear the actual data 
+        tcpclient = TCPClient()
+        dst = None
+        if path in self.meta:
+            dst = self.meta[path]['location']
+            self.meta.pop(path)
+        else:
+            ip = misc.findserver(path)
+            packet = Packet(path, "UNLINK", {}, {}, 0, [ip], None)
+            ret = tcpclient.sendpacket(packet)
+            if not ret.meta:
+                logger.log("ERROR", "UNLINK", "unlink "+path+" failed")
+                raise FuseOSError(ENOENT)
+            else:
+                dst = ret.meta[path]['location']
+        if not dst:
+            logger.log("ERROR", "UNLINK", "unlink "+path+" failed")
+            raise FuseOSError(ENOENT)
+        else:
+            hvalue = misc.hash(path)
+            if hvalue in self.data:
+                self.data.pop(hvalue)
+            else:
+                packet = Packet(path, "REMOVE", {}, {}, 0, [dst], None)
+                ret = tcpclient.sendpacket(packet)
+                if ret.ret != 0:
+                    logger.log("ERROR", "UNLINK", "remove "+path+" failed")
+
     def utimens(self, path, times=None):
         global logger
         logger.log("INFO", "utimens", path)
@@ -478,11 +507,25 @@ class Amfora(LoggingMixIn, Operations):
     def local_unlink(self, path):
         global logger
         logger.log("INFO", "local_unlink", path)
+        if path not in self.meta:
+            return None
+        else:
+            rdict = dict()
+            rdict[path] = self.meta[path]
+            self.meta.pop(path)
+            return rdict
 
-    def local_delete(self, path):
+    def local_remove(self, path):
         global logger
+        global misc
         logger.log("INFO", "local_delete", path)
-        
+        hvalue = misc.hash(path)
+        if hvalue not in self.data:
+            return 1
+        else:
+            self.data.pop(hvalue)
+            return 0
+
     def local_utimens(self, path, times=None):
         global logger
         logger.log("INFO", "local_utimens", path)
@@ -856,6 +899,7 @@ class TCPworker(threading.Thread):
                 ret = amfora.local_chmod(filename, mode)
                 remoteip, remoteport = conn.getpeername()
                 p = Packet(packet.path, packet.op, ret, None, 0, [remoteip], None)
+                self.sendpacket(conn, p)
                 conn.close()
             elif packet.op == 'CHOWN':
                 filename = el[0]
@@ -894,15 +938,22 @@ class TCPworker(threading.Thread):
                 conn.close()
 
             elif packet.op == 'UNLINK':
-                path = el[0]
-                ret = ramdisk.files[path]
-                conn.send(pickle.dumps(ret))
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                ret = amfora.local_unlink(path)
+                if not ret:
+                    logger.log("ERROR", "UNLINK", "unlinking "+path+" failed")
+                p = Packet(packet.path, packet.op, ret, {}, 0, [remoteip], None)
+                self.sendpacket(conn, p)
                 conn.close()
-                ramdisk.local_unlink(path)
-            elif packet.op == 'DELETE':
-                path = el[0]
-                ramdisk.local_delete(path)
-                conn.send(bytes(str(0), "utf8"))
+            elif packet.op == 'REMOVE':
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                ret = amfora.local_remove(path)
+                if ret != 0:
+                    logger.log("ERROR", "REMOVE", "removing "+path+" failed")
+                p = Packet(packet.path, packet.op, {}, {}, ret, [remoteip], None)
+                self.sendpacket(conn, p)
                 conn.close()
             elif packet.op == 'SYMLINK':
                 path = el[0]
