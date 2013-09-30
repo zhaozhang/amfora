@@ -96,15 +96,15 @@ class Amfora(LoggingMixIn, Operations):
             self.meta[path]['st_mode'] &= 0o770000 
             self.meta[path]['st_mode'] |= mode
         else:
-            print("chmod sent to remote server")
+            logger.log("INFO", "CHMOD", "chmod sent to remote server "+path+" "+str(mode))
             #send a chmod message to remote server
-            #tcpclient = TCPClient()
-            #ip = misc.findserver(path)
-            #tcpclient = TCPClient(ip)
-            #packet = Packet(path, "chmod", None, None, None, ip, mode)
-            #ret=tcpclient.sendpacket(packet)
-            #if ret != 0:
-            #    logger.log("ERROR", "chmod", path+" with "+str(mode)+" failed on "+ip)
+            tcpclient = TCPClient()
+            ip = misc.findserver(path)
+            tcpclient = TCPClient(ip)
+            packet = Packet(path, "CHMOD", {}, {}, 0, [ip], mode)
+            ret=tcpclient.sendpacket(packet)
+            if ret != 0:
+                logger.log("ERROR", "chmod", path+" with "+str(mode)+" failed on "+ip)
             
     def chown(self, path, uid, gid):
         global logger
@@ -687,8 +687,9 @@ class TCPClient():
             self.one_sided_sendpacket(op, 55000)
         
         while colthread.is_alive():
-            sleep(1)
-            logger.log("INFO", "TCPclient_sendallpacket()", "waiting for colthread to finish")
+            pass
+            #sleep(1)
+            #logger.log("INFO", "TCPclient_sendallpacket()", "waiting for colthread to finish")
         return packet    
     
 
@@ -850,10 +851,11 @@ class TCPworker(threading.Thread):
                     ret = ramdisk.files[filename].get('attrs', {})
                 conn.send(pickle.dumps(ret))
             elif packet.op == 'CHMOD':
-                filename = el[0]
-                mode = int(el[2])
-                ret = ramdisk.local_chmod(filename, mode)
-                conn.send(bytes(str(ret), "utf8"))
+                filename = packet.path
+                mode = packet.misc
+                ret = amfora.local_chmod(filename, mode)
+                remoteip, remoteport = conn.getpeername()
+                p = Packet(packet.path, packet.op, ret, None, 0, [remoteip], None)
                 conn.close()
             elif packet.op == 'CHOWN':
                 filename = el[0]
