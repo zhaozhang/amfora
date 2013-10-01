@@ -21,6 +21,7 @@ import string
 import subprocess
 import codecs
 import zlib
+import math
 
 '''
 Amfora is a shared in-memory file system. Amfora is POSIX compatible.
@@ -164,7 +165,34 @@ class Amfora(LoggingMixIn, Operations):
             return 0, rpacket.data, nmeta
 
     def scatter(self, path, algo):
-        pass
+        global logger
+        global slist
+        global mountpoint
+        global misc
+        #scatter is a two step procedure
+        #1, gather the data to one node
+        #2, scatter the data to all nodes
+        tcpclient = TCPClient()
+        apath = path[len(mountpoint):]
+        logger.log("INFO", "SCATTER", "scatter "+path+" "+apath)
+        ret, data, meta = self.gather(path, algo)
+        #keep part of the data local
+        num_files = math.ceil(len(meta)/len(slist))
+        logger.log("INFO", "SCATTER", "This node keeps "+str(num_files)+" files")    
+
+        for i in range(num_files):
+            k, v = meta.popitem()
+            data.pop(v['key'])
+
+        packet=Packet(apath, "SCATTER", meta, data, 0, slist, None)
+        rpacket = tcpclient.sendallpacket(packet)
+        if rpacket.ret != 0:
+            logger.log("ERROR", "SCATTER", "allgathering path: "+apath+" failed")
+            return 1
+        else:
+            logger.log("INFO", "SCATTER", "allgathering path: "+apath+" finished")
+            return 0
+
     def shuffle(self, path, algo, dst):
         pass
     def load(self, src, dst):
@@ -340,7 +368,6 @@ class Amfora(LoggingMixIn, Operations):
             self.meta.update(rpacket.meta)
             #filtering local metadata in the parent dir of path
             rlist = ['.', '..']
-            #print(self.meta.keys())
             for m in self.meta:
                 if m != '/' and path == os.path.dirname(m):
                     b = os.path.basename(m)
@@ -820,8 +847,21 @@ class TCPClient():
         colthread = CollectiveThread(server, rdict, packet)
         colthread.start()
 
-        for ol in olist:    
-            op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, packet.misc)
+        meta = dict(packet.meta)
+        data = dict(packet.data)
+
+        for ol in olist:
+            if packet.op == "SCATTER":
+                num_files = math.ceil(len(ol)*len(meta)/(len(packet.tlist)-1))
+                mdict = {}
+                ddict = {}
+                for i in range(num_files):
+                    k, v = meta.popitem()
+                    mdict[k] = v
+                    ddict[v['key']] = data.pop(v['key'])
+                op = Packet(packet.path, packet.op, mdict, ddict, packet.ret, ol, packet.misc)    
+            else:
+                op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, packet.misc)
             self.one_sided_sendpacket(op, 55000)
         
         while colthread.is_alive():
@@ -1118,6 +1158,24 @@ class TCPworker(threading.Thread):
                 rpacket.tlist = [remoteip]    
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
                 conn.close()
+            elif packet.op == 'SCATTER':
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                #keep part of the data local
+                num_files = math.ceil(len(packet.meta)/len(packet.tlist))
+                logger.log("INFO", "SCATTER", "This node keeps "+str(num_files)+" files")    
+                for i in range(num_files):
+                    k, v = packet.meta.popitem()
+                    amfora.meta[k] = v
+                    amfora.data[v['key']] = packet.data.pop(v['key'])
+
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendallpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "SCATTER", "scattering dir: "+path+" failed")
+                rpacket.tlist = [remoteip]    
+                tcpclient.one_sided_sendpacket(rpacket, 55001)    
+                conn.close()
 
             else:
                 logger.log("ERROR", "TCPserver.run()", "Invalid op "+packet.op)
@@ -1169,7 +1227,7 @@ class Interfaceserver(threading.Thread):
             elif el[1] == 'GATHER':
                 path = el[0]
                 algo = el[2]
-                ret, retdict = amfora.gather(path, algo)
+                ret, ddict, mdict = amfora.gather(path, algo)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
             elif el[1] == 'ALLGATHER':
@@ -1181,7 +1239,7 @@ class Interfaceserver(threading.Thread):
             elif el[1] == 'SCATTER':
                 path = el[0]
                 algo = el[2]
-                ret = ramdisk.scatter(path, algo)
+                ret = amfora.scatter(path, algo)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
             elif el[1] == 'SHUFFLE':
@@ -1327,6 +1385,11 @@ class CollectiveThread(threading.Thread):
                 for k in self.packet.misc[localip]:
                     self.packet.data[k] = amfora.data[k]
             self.packet.ret = self.packet.ret | 0
+            logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
+        elif self.packet.op == "SCATTER":
+            self.packet.ret = self.packet.ret | 0
+            self.packet.meta = {}
+            self.packet.data = {}
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         else:
             logger.log("ERROR", "CollThread_run()", "operation: "+self.packet.op+" not supported")
