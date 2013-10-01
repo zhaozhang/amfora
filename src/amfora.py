@@ -106,7 +106,26 @@ class Amfora(LoggingMixIn, Operations):
         return rpacket.ret
 
     def allgather(self, path, algo):
-        pass
+        global logger
+        global slist
+        global mountpoint
+        global misc
+        #allgather is a two step procedure
+        #1, gather the data to one node
+        #2, multicast the data to all nodes
+        tcpclient = TCPClient()
+        apath = path[len(mountpoint):]
+        logger.log("INFO", "ALLGATHER", "allgather "+path+" "+apath)
+        ret, data, meta = self.gather(path, algo)
+        packet=Packet(apath, "MULTICAST", meta, data, 0, slist, None)
+        rpacket = tcpclient.sendallpacket(packet)
+        if rpacket.ret != 0:
+            logger.log("ERROR", "ALLGATHER", "allgathering path: "+apath+" failed")
+            return 1
+        else:
+            logger.log("INFO", "ALLGATHER", "allgathering path: "+apath+" finished")
+            return 0
+            
 
     def gather(self, path, algo):
         global logger
@@ -128,6 +147,7 @@ class Amfora(LoggingMixIn, Operations):
         #readdir to get the metadata
         packet = Packet(apath, "READDIR", {}, {}, 0, slist, 0)
         rpacket = tcpclient.sendallpacket(packet)
+        nmeta = dict(rpacket.meta)
         gdict = dict()
         for m in rpacket.meta:
             if rpacket.meta[m]['location'] not in gdict:
@@ -141,7 +161,7 @@ class Amfora(LoggingMixIn, Operations):
         else:
             self.data.update(rpacket.data)
             logger.log("INFO", "GATHER", "gather "+path+" finished")
-            return 0, rpacket.data
+            return 0, rpacket.data, nmeta
 
     def scatter(self, path, algo):
         pass
@@ -465,6 +485,9 @@ class Amfora(LoggingMixIn, Operations):
             if ip == localip:
                 self.meta[path] = self.cmeta[path]
                 return 0
+            elif path in self.meta:
+                self.local_release(path, fh)
+                return 0
             else:
                 logger.log("INFO", "RELEASE", "release sent to remote server: "+path+" "+ip)
                 tempdict = dict()
@@ -476,7 +499,7 @@ class Amfora(LoggingMixIn, Operations):
                     logger.log("ERROR", "RELEASE", path+" failed")
                 return rpacket.ret    
         elif hvalue in self.data:
-            self.data.pop(hvalue)
+             self.data.pop(hvalue)
         else:
             return 0
 
@@ -1113,6 +1136,7 @@ class Interfaceserver(threading.Thread):
         try:
             logger.log("INFO", "Interfaceserver_opensocket", "Open server socket")
             self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server.bind((self.host, self.port))
             self.server.listen(5)
         except socket.error as msg:
@@ -1151,7 +1175,7 @@ class Interfaceserver(threading.Thread):
             elif el[1] == 'ALLGATHER':
                 path = el[0]
                 algo = el[2]
-                ret = ramdisk.allgather(path, algo)
+                ret = amfora.allgather(path, algo)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
             elif el[1] == 'SCATTER':
