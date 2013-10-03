@@ -22,6 +22,7 @@ import subprocess
 import codecs
 import zlib
 import math
+import re
 
 '''
 Amfora is a shared in-memory file system. Amfora is POSIX compatible.
@@ -233,7 +234,22 @@ class Amfora(LoggingMixIn, Operations):
     def dump(self, src, dst):
         pass
     def execute(self):
-        pass
+        global logger
+        global slist
+        global mountpoint
+        global misc
+        logger.log("INFO", "EXECUTE", "execute all tasks")
+        tcpclient = TCPClient()
+        taskl = misc.readtask()
+        packet=Packet("", "EXECUTE", {}, {}, 0, slist, taskl)
+        rpacket = tcpclient.sendallpacket(packet)
+        if sum(rpacket.meta.values()) != 0:
+            logger.log("ERROR", "EXECUTE", "execution failed")
+            return 1
+        else:
+            logger.log("INFO", "EXECUTE", "execution finished "+str(rpacket.meta))
+            return 0
+
 
     '''
     below are POSIX interface
@@ -893,6 +909,12 @@ class TCPClient():
                     mdict[k] = v
                     ddict[v['key']] = data.pop(v['key'])
                 op = Packet(packet.path, packet.op, mdict, ddict, packet.ret, ol, packet.misc)    
+            elif packet.op == "EXECUTE":
+                taskl = []
+                num_tasks = math.ceil(len(ol)*len(packet.misc)/len(packet.tlist))
+                for i in range(num_tasks):
+                    taskl.append(packet.misc.pop())
+                op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, taskl)    
             else:
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, packet.misc)
             self.one_sided_sendpacket(op, 55000)
@@ -921,7 +943,14 @@ class TCPClient():
             
             while shuffleserver.is_alive():
                 pass
-            
+        elif packet.op == "EXECUTE":
+            logger.log("INFO", "TCPclient_sendallpacket()", "ready to execute: "+str(len(packet.misc))+" tasks")
+            executor = Executor(packet.misc)
+            executor.run()
+            packet.meta.update(executor.smap)
+            logger.log("INFO", "TCPclient_sendallpacket()", "finished executing: "+str(len(packet.misc))+" tasks")
+        else:
+            pass
         while colthread.is_alive():
             pass
             #sleep(1)
@@ -1327,7 +1356,17 @@ class TCPworker(threading.Thread):
                 rpacket.tlist = [remoteip]
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
                 conn.close()
-                
+            elif packet.op  == 'EXECUTE':
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendallpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "EXECUTE", "Executing failed")
+                rpacket.tlist = [remoteip]    
+                tcpclient.one_sided_sendpacket(rpacket, 55001)    
+                conn.close()
+    
             else:
                 logger.log("ERROR", "TCPserver.run()", "Invalid op "+packet.op)
 
@@ -1401,16 +1440,8 @@ class Interfaceserver(threading.Thread):
                 ret = amfora.shuffle(path, algo, dst)
                 conn.send(bytes(str(0), "utf8"))
                 conn.close()
-            elif el[1] == 'QUEUE':
-                desc = el[0]
-                task = Task(desc)
-                ret = executor.push(task)
-                conn.send(bytes(str(ret), "utf8"))
-                conn.close()
             elif el[1] == 'EXECUTE':
-                ret = ramdisk.execute()
-                #ret = executor.execute()
-                #ret = executor.wait()
+                ret = amfora.execute()
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
             elif el[1] == 'STATE':
@@ -1487,7 +1518,9 @@ class Misc():
                 logger.log("INFO", "MISC_shuffle()", "lines: "+str(len(lines)))
                 for line in lines[:len(lines)-1]:
                     #change to regular expression in next release
-                    k, v = line.split(b'\t')
+                    m = re.match(b"(?P<key>\w+)\s+(?P<value>\w+)", line)
+                    k = m.group('key')
+                    v = m.group('value')
                     value = zlib.adler32(k) & 0xffffffff
                     ip = slist[value%len(slist)]
                     hdict[ip].extend(line+b'\n')
@@ -1495,6 +1528,15 @@ class Misc():
                 logger.log("ERROR", "MISC_shuffle()", "hash value "+str(h)+" is not in local storage")
         return hdict        
 
+    def readtask(self):
+        fd = open("/tmp/task.txt", 'r')
+        lines = fd.readlines()
+        taskl = []
+        for l in lines:
+            task = Task(l.strip('\n'))
+            taskl.append(task)
+        return taskl
+    
 class CollectiveThread(threading.Thread):
     def __init__(self, server, rdict, packet):
         threading.Thread.__init__(self)
@@ -1582,6 +1624,10 @@ class CollectiveThread(threading.Thread):
             self.packet.meta = {}
             self.packet.data = {}
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
+        elif self.packet.op == "EXECUTE":
+            self.packet.ret = self.packet.ret | 0
+            pass
+            logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         else:
             logger.log("ERROR", "CollThread_run()", "operation: "+self.packet.op+" not supported")
    
@@ -1613,14 +1659,11 @@ class Task():
         self.desc = desc
         self.ret = None
         tempkey = self.desc+str(self.queuetime)
-        md5 = hashlib.md5()
-        md5.update(tempkey.encode())
-        self.key = md5.hexdigest()
+        self.key = zlib.adler32(bytes(tempkey, 'utf8')) & 0xffffffff
 
         
-class Executor(threading.Thread):
+class Executor():
     def __init__(self, tlist):
-        threading.Thread.__init__(self)
         self.queue = []
         self.fqueue = []
         self.smap = {}
@@ -1643,40 +1686,11 @@ class Executor(threading.Thread):
             ret = os.system(task.desc)
             task.endtime = time()
             task.ret = ret
-            self.smap[task.key] = 0
-            self.fqueue.append(task)
+            self.smap[task.desc+" "+str(task.key)] = 0
+            #self.fqueue.append(task)
             logger.log('INFO', 'Executor_run', 'finishing task: '+task.desc)
         logger.log('INFO', 'Executor_run', 'all tasks finished')
 
-class TCP_big():
-    def __init__(self):
-        self.bufsize = 1048576
-    
-    def send(self, sock, data, length):
-        global logger
-        sent = 0
-        while sent < length:
-            if length - sent > self.bufsize:
-                sent_iter = sock.send(data[sent:sent+self.bufsize])
-            else:
-                sent_iter = sock.send(data[sent:])
-            sent = sent + sent_iter
-            logger.log("INFO", "TCP_big_send", "sent "+str(sent)+" bytes")
-        logger.log("INFO", "TCP_big_send", "sent finished")
-
-    def recv(self, sock, length):
-        data = b''
-        rect = 0
-        while rect < length:
-            if length - rect > self.bufsize:
-                temp = sock.recv(self.bufsize)
-            else:
-                temp = sock.recv(length-rect)
-            rect = rect + len(temp)
-            data = data + temp
-            logger.log("INFO", "TCP_big_recv", "receive "+str(rect)+" bytes")        
-        logger.log("INFO", "TCP_big_recv", "recv finished")
-        return data
 
 if __name__ == '__main__':
     if len(argv) != 4:
@@ -1720,13 +1734,15 @@ if __name__ == '__main__':
     while not tcpserver.is_alive():
         tcpserver.start()
 
-    tcpworker = TCPworker('TCPworker')
-    while not tcpworker.is_alive():
-        tcpworker.start()
-
-    tcpworker1 = TCPworker('TCPworker1')
-    while not tcpworker1.is_alive():
-        tcpworker1.start()
+    workerl = []    
+    for i in range(2):
+        tcpworker = TCPworker('TCPworker'+str(i))
+        while not tcpworker.is_alive():
+            tcpworker.start()
+        workerl.append(tcpworker)    
+    #tcpworker1 = TCPworker('TCPworker1')
+    #while not tcpworker1.is_alive():
+    #    tcpworker1.start()
 
     interfaceserver = Interfaceserver('Interfaceserver', 55002)
     while not interfaceserver.is_alive():
