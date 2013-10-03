@@ -439,9 +439,46 @@ class Amfora(LoggingMixIn, Operations):
 
     def rename(self, old, new):
         global logger
+        global misc
+        global localip
         logger.log("INFO", "rename", "old: "+old+", new: "+new)
-        pass
+        oldhash = misc.hash(old)
+        newhash = misc.hash(new)
 
+        if old in self.meta:
+            self.cmeta[new] = self.meta[old]
+        else:    
+            self.cmeta[new] = self.getattr(old, None)
+ 
+        if oldhash in self.cdata:
+            self.cdata[newhash] = self.cdata[oldhash]
+            self.cdata.pop(oldhash)
+        else:
+            ip = self.cmeta[new]['location']
+            logger.log("INFO", "READ", "read sent to remote server "+old+" "+ip)
+            packet = Packet(old, "READ", {}, {}, 0, [ip], [0, 0])
+            tcpclient = TCPClient()
+            rpacket = tcpclient.sendpacket(packet)
+            if not rpacket.data:
+                logger.log("ERROR", "READ", "remote read on "+path+" failed on "+ip)
+                return None
+            else:
+                self.cdata[newhash] = rpacket.data[oldhash]
+
+        self.cmeta[new]['key'] = misc.hash(new)
+        self.cmeta[new]['location'] = localip
+        
+        if old in self.meta:
+            self.meta.pop(old)
+
+        ip = misc.findserver(old)
+        if ip != localip:
+            tcpclient = TCPClient()
+            packet = Packet(old, "RMMETA", None, None, None, [ip], None)
+            ret = tcpclient.sendpacket(packet)
+    
+        self.release(new, 0)
+    
     def rmdir(self, path):
         #rmdir is a two step procedure
         #Step 1, remove the dir path and return the file meta within
@@ -689,7 +726,7 @@ class Amfora(LoggingMixIn, Operations):
     def local_remove(self, path):
         global logger
         global misc
-        logger.log("INFO", "local_delete", path)
+        logger.log("INFO", "local_remove", path)
         hvalue = misc.hash(path)
         if hvalue not in self.data:
             return 1
@@ -697,6 +734,16 @@ class Amfora(LoggingMixIn, Operations):
             self.data.pop(hvalue)
             return 0
 
+    def local_rmmeta(self, path):    
+        global logger
+        global misc
+        logger.log("INFO", "local_rmmeta", path)
+        if path in self.cmeta:
+            self.cmeta.pop(path)
+        if path in self.meta:
+            self.meta.pop(path)
+        return 0
+    
     def local_utimens(self, path, times=None):
         global logger
         logger.log("INFO", "local_utimens", path)
@@ -1250,6 +1297,15 @@ class TCPworker(threading.Thread):
                 path = packet.path
                 remoteip, remoteport = conn.getpeername()
                 ret = amfora.local_remove(path)
+                if ret != 0:
+                    logger.log("ERROR", "REMOVE", "removing "+path+" failed")
+                p = Packet(packet.path, packet.op, {}, {}, ret, [remoteip], None)
+                self.sendpacket(conn, p)
+                conn.close()
+            elif packet.op == 'RMMETA':
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                ret = amfora.local_rmmeta(path)
                 if ret != 0:
                     logger.log("ERROR", "REMOVE", "removing "+path+" failed")
                 p = Packet(packet.path, packet.op, {}, {}, ret, [remoteip], None)
