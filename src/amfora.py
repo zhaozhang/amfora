@@ -230,9 +230,52 @@ class Amfora(LoggingMixIn, Operations):
         return rpacket.ret
         
     def load(self, src, dst):
-        pass
+        global logger
+        global slist
+        global mountpoint
+        global misc
+        logger.log("INFO", "LOAD", "loading "+src+" to "+dst+" failed")
+        apath = dst[len(mountpoint):]
+        if dst == mountpoint:
+            apath = '/'
+
+        if dst[:len(mountpoint)] != mountpoint:
+            logger.log("ERROR", "LOAD", dst[:len(mountpoint)]+" is not the mountpint")    
+            return 1
+        if apath not in self.meta:
+            logger.log("ERROR", "LOAD", "direcotry "+apath+" does not exist")    
+            return 1
+        if not os.path.exists(src):
+            logger.log("ERROR", "LOAD", "directory: "+src+" does not exist")
+            return 1
+
+        tcpclient = TCPClient()
+        #mkdir
+        basename = os.path.basename(src)
+        dirname = os.path.join(apath, basename)
+        logger.log("INFO", "LOAD", "creating dir: "+dirname)
+        if dirname not in self.meta:
+            self.mkdir(dirname, self.meta['/']['st_mode'])
+        
+        #read file names in the src dir
+        tlist = os.listdir(src)
+        flist = []
+        for f in tlist:
+            flist.append(os.path.join(src, f))
+        flist.sort()
+        logger.log("INFO", "LOAD", "loading the following files "+str(flist)+" from "+src+" to "+dirname)
+        packet=Packet(dirname, "LOAD", {}, {}, 0, slist, flist)
+        rpacket = tcpclient.sendallpacket(packet)
+        if sum(rpacket.meta.values()) != 0:
+            logger.log("ERROR", "LOAD", "loading "+src+" to "+dirname+" failed")
+            return 1
+        else:
+            logger.log("INFO", "LOAD", "loading "+src+" to "+dirname+" finished")
+            return 0
+
     def dump(self, src, dst):
         pass
+
     def execute(self):
         global logger
         global slist
@@ -772,7 +815,21 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         logger.log("INFO", "local_updatelocation", path+" location: "+meta['location'])
         
-
+    def local_load(self, dst, filel):
+        global logger
+        logger.log("INFO", "local_load", "loading "+str(filel)+" to "+dst)
+        for f in filel:
+            basename = os.path.basename(f)
+            dstf = os.path.join(dst, basename)
+            self.create(dstf, 33188)
+            fd = open(f, 'rb')
+            hvalue = misc.hash(dstf)
+            self.cdata[hvalue] = fd.read()
+            fd.close()
+            self.cmeta[dstf]['st_size'] = len(self.cdata[hvalue])
+            self.release(dstf, 0)
+        logger.log("INFO", "local_load", "finished loading "+str(filel)+" to "+dst)
+    
 class TCPClient():
     def __init__(self):
         self.bufsize = 1048576
@@ -961,7 +1018,13 @@ class TCPClient():
                 num_tasks = math.ceil(len(ol)*len(packet.misc)/len(packet.tlist))
                 for i in range(num_tasks):
                     taskl.append(packet.misc.pop())
-                op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, taskl)    
+                op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, taskl) 
+            elif packet.op == "LOAD":
+                filel = []
+                num_files = math.ceil(len(ol)*len(packet.misc)/len(packet.tlist))
+                for i in range(num_files):
+                    filel.append(packet.misc.pop())
+                op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, filel)    
             else:
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, packet.misc)
             self.one_sided_sendpacket(op, 55000)
@@ -996,6 +1059,11 @@ class TCPClient():
             executor.run()
             packet.meta.update(executor.smap)
             logger.log("INFO", "TCPclient_sendallpacket()", "finished executing: "+str(len(packet.misc))+" tasks")
+        elif packet.op == "LOAD":
+            global amfora
+            logger.log("INFO", "TCPclient_sendallpacket()", "read to load: "+str(packet.misc))
+            amfora.local_load(packet.path, packet.misc)
+            logger.log("INFO", "TCPclient_sendallpacket()", "finished loading: "+str(packet.misc))
         else:
             pass
         while colthread.is_alive():
@@ -1422,6 +1490,16 @@ class TCPworker(threading.Thread):
                 rpacket.tlist = [remoteip]    
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
                 conn.close()
+            elif packet.op  == 'LOAD':
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendallpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "LOAD", "Loading failed")
+                rpacket.tlist = [remoteip]    
+                tcpclient.one_sided_sendpacket(rpacket, 55001)    
+                conn.close()
     
             else:
                 logger.log("ERROR", "TCPserver.run()", "Invalid op "+packet.op)
@@ -1512,7 +1590,7 @@ class Interfaceserver(threading.Thread):
             elif el[1] == 'LOAD':
                 src = el[0]
                 dst = el[2]
-                ret = ramdisk.load(src, dst)
+                ret = amfora.load(src, dst)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
             elif el[1] == 'DUMP':
@@ -1682,7 +1760,9 @@ class CollectiveThread(threading.Thread):
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         elif self.packet.op == "EXECUTE":
             self.packet.ret = self.packet.ret | 0
-            pass
+            logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
+        elif self.packet.op == "LOAD":
+            self.packet.ret = self.packet.ret | 0
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         else:
             logger.log("ERROR", "CollThread_run()", "operation: "+self.packet.op+" not supported")
