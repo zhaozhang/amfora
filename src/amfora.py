@@ -1837,6 +1837,10 @@ class CollectiveThread(threading.Thread):
         elif self.packet.op == "LOAD":
             self.packet.ret = self.packet.ret | 0
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
+        elif self.packet.op == "LOAD":
+            self.packet.ret = self.packet.ret | 0
+            self.misc = None
+            logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         else:
             logger.log("ERROR", "CollThread_run()", "operation: "+self.packet.op+" not supported")
    
