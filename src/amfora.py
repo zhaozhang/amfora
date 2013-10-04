@@ -234,7 +234,7 @@ class Amfora(LoggingMixIn, Operations):
         global slist
         global mountpoint
         global misc
-        logger.log("INFO", "LOAD", "loading "+src+" to "+dst+" failed")
+        logger.log("INFO", "LOAD", "loading "+src+" to "+dst+" started")
         apath = dst[len(mountpoint):]
         if dst == mountpoint:
             apath = '/'
@@ -266,7 +266,7 @@ class Amfora(LoggingMixIn, Operations):
         logger.log("INFO", "LOAD", "loading the following files "+str(flist)+" from "+src+" to "+dirname)
         packet=Packet(dirname, "LOAD", {}, {}, 0, slist, flist)
         rpacket = tcpclient.sendallpacket(packet)
-        if sum(rpacket.meta.values()) != 0:
+        if rpacket.ret != 0:
             logger.log("ERROR", "LOAD", "loading "+src+" to "+dirname+" failed")
             return 1
         else:
@@ -274,8 +274,57 @@ class Amfora(LoggingMixIn, Operations):
             return 0
 
     def dump(self, src, dst):
-        pass
+        global logger
+        global slist
+        global mountpoint
+        global misc
+        logger.log("INFO", "DUMP", "dumping "+src+" to "+dst+" started")
+        apath = src[len(mountpoint):]
+        if src == mountpoint:
+            apath = '/'
 
+        if src[:len(mountpoint)] != mountpoint:
+            logger.log("ERROR", "LOAD", src[:len(mountpoint)]+" is not the mountpint")    
+            return 1
+        if apath not in self.meta:
+            logger.log("ERROR", "LOAD", "direcotry "+apath+" does not exist")    
+            return 1
+        if not os.path.exists(dst):
+            logger.log("ERROR", "LOAD", "directory: "+dst+" does not exist")
+            return 1
+
+        tcpclient = TCPClient()
+        
+        #mkdir for dst
+        basename = os.path.basename(src)
+        dirname = os.path.join(dst, basename)
+        if os.path.exists(dirname):
+            logger.log("ERROR", "LOAD", "directory: "+dirname+" exists")
+            return 1
+        else:
+            os.mkdir(dirname)
+
+        #read metadata of the files in this dir    
+        packet = Packet(apath, "READDIR", {}, {}, 0, slist, 0)
+        rpacket = tcpclient.sendallpacket(packet)
+        meta = dict(rpacket.meta)
+        fdict = dict() #key-ip, value-list of hvalue
+        for k in meta:
+            if meta[k]['location'] not in fdict:
+                fdict[meta[k]['location']] = []
+            fdict[meta[k]['location']].append([meta[k]['key'], os.path.join(dirname, k[len(apath)+1:])])   
+        
+        logger.log("INFO", "DUMP", "dumping the following files "+str(fdict)+" from "+src+" to "+dirname)
+        packet=Packet(src, "DUMP", {}, {}, 0, slist, fdict)
+        rpacket = tcpclient.sendallpacket(packet)
+        if rpacket.ret != 0:
+            logger.log("ERROR", "DUMP", "dumping "+src+" to "+dirname+" failed")
+            return 1
+        else:
+            logger.log("INFO", "DUMP", "dumping "+src+" to "+dirname+" finished")
+            return 0
+    
+        
     def execute(self):
         global logger
         global slist
@@ -829,7 +878,16 @@ class Amfora(LoggingMixIn, Operations):
             self.cmeta[dstf]['st_size'] = len(self.cdata[hvalue])
             self.release(dstf, 0)
         logger.log("INFO", "local_load", "finished loading "+str(filel)+" to "+dst)
-    
+    def local_dump(self, pairl):
+        global logger
+        logger.log("INFO", "local_dump", "dumping"+str(pairl))
+        for p in pairl:
+            hvalue, fname = p
+            fd = open(fname, 'wb')
+            fd.write(self.data[hvalue])
+            fd.close()
+        logger.log("INFO", "local_dump", "finished dumping")    
+
 class TCPClient():
     def __init__(self):
         self.bufsize = 1048576
@@ -1024,7 +1082,7 @@ class TCPClient():
                 num_files = math.ceil(len(ol)*len(packet.misc)/len(packet.tlist))
                 for i in range(num_files):
                     filel.append(packet.misc.pop())
-                op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, filel)    
+                op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, filel)
             else:
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, packet.misc)
             self.one_sided_sendpacket(op, 55000)
@@ -1064,6 +1122,12 @@ class TCPClient():
             logger.log("INFO", "TCPclient_sendallpacket()", "read to load: "+str(packet.misc))
             amfora.local_load(packet.path, packet.misc)
             logger.log("INFO", "TCPclient_sendallpacket()", "finished loading: "+str(packet.misc))
+        elif packet.op == "DUMP":
+            #global amfora
+            #global localip
+            logger.log("INFO", "TCPclient_sendallpacket()", "read to dump: "+str(packet.misc))
+            amfora.local_dump(packet.misc[localip])
+            logger.log("INFO", "TCPclient_sendallpacket()", "finished dumping: "+str(packet.misc))
         else:
             pass
         while colthread.is_alive():
@@ -1500,7 +1564,16 @@ class TCPworker(threading.Thread):
                 rpacket.tlist = [remoteip]    
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
                 conn.close()
-    
+            elif packet.op  == 'DUMP':
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendallpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "DUMP", "Dumping failed")
+                rpacket.tlist = [remoteip]    
+                tcpclient.one_sided_sendpacket(rpacket, 55001)    
+                conn.close()
             else:
                 logger.log("ERROR", "TCPserver.run()", "Invalid op "+packet.op)
 
@@ -1596,7 +1669,7 @@ class Interfaceserver(threading.Thread):
             elif el[1] == 'DUMP':
                 src = el[0]
                 dst = el[2]
-                ret = ramdisk.dump(src, dst)
+                ret = amfora.dump(src, dst)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
 
