@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-##!/home/zhaozhang/workplace/python/bin/python3.3
 import logging
 
 from collections import defaultdict
@@ -49,7 +48,7 @@ class TCPclient():
                 sock.connect((ip, port))
             except socket.error:
                 logger.log("ERROR", "TCPclient_init", "connect "+ip+" failed, try again")
-                sleep(1)
+                #sleep(1)
                 continue
             else:
                 connected = 1
@@ -127,13 +126,13 @@ class AMFSclient():
     
 if __name__ == '__main__':
     global logger
-    logger = Logger("/tmp/amfs-client.log")
-    logger.log("INFO", "main", "AMFS client start")
+    logger = Logger("/tmp/amfora-client.log")
+    logger.log("INFO", "main", "AMFORA client start")
     client = AMFSclient()
     op = sys.argv[1]
     if op == "multicast":
-        algo = sys.argv[2]
-        path = sys.argv[3]
+        algo = 'mst'
+        path = sys.argv[2]
         logger.log("INFO", "main", "multicast "+path+" start")
         start = time()
         ret = client.multi(path, algo)
@@ -143,32 +142,34 @@ if __name__ == '__main__':
         else:
             logger.log("ERROR", "main", "multicast "+path+" failed")
     elif op == "gather":
-        algo = sys.argv[2]
-        path = sys.argv[3]
+        algo = 'mst'
+        path = sys.argv[2]
         logger.log("INFO", "main", "gather "+path+" start")
         start = time()
         ret = client.gather(path, algo)
         end = time()
-        print("returned: "+str(ret))
         if int(ret) == 0:
             logger.log("INFO", "main", "gather "+path+" succeeded in "+str(end-start)+" seconds")
         else:
+            print(op+" "+path+" failed")
             logger.log("ERROR", "main", "gather "+path+" failed")
+            sys.exit(1)
     elif op == "allgather":
-        algo = sys.argv[2]
-        path = sys.argv[3]
+        algo = 'mst'
+        path = sys.argv[2]
         logger.log("INFO", "main", "all gather "+path+" start")
         start = time()
         ret = client.allgather(path, algo)
         end = time()
-        print("returned: "+str(ret))
         if int(ret) == 0:
             logger.log("INFO", "main", "allgather "+path+" succeeded in "+str(end-start)+" seconds")
         else:
+            print(op+" "+path+" failed")
             logger.log("ERROR", "main", "allgather "+path+" failed")
+            sys.exit(1)
     elif op == "scatter":
-        algo = sys.argv[2]
-        path = sys.argv[3]
+        algo = 'mst'
+        path = sys.argv[2]
         logger.log("INFO", "main", "scatter "+path+" start")
         start = time()
         ret = client.scatter(path, algo)
@@ -176,11 +177,13 @@ if __name__ == '__main__':
         if int(ret) == 0:
             logger.log("INFO", "main", "scatter "+path+" succeeded in "+str(end-start)+" seconds")
         else:
+            print(op+" "+path+" failed")
             logger.log("ERROR", "main", "scatter "+path+" failed")
+            sys.exit(1)
     elif op == "shuffle":
-        algo = sys.argv[2]
-        src = sys.argv[3]
-        dst = sys.argv[4]
+        algo = 'mst'
+        src = sys.argv[2]
+        dst = sys.argv[3]
         logger.log("INFO", "main", "shuffle the data in "+src+" to "+dst)
         start = time()
         ret = client.shuffle(src, algo, dst)
@@ -188,7 +191,9 @@ if __name__ == '__main__':
         if int(ret) == 0:
             logger.log("INFO", "main", "shuffle "+src+" to "+dst+" succeeded in "+str(end-start)+" seconds")
         else:
+            print(op+" "+path+" failed")
             logger.log("ERROR", "main", "shuffle "+src+" to "+dst+" failed")
+            sys.exit(1)
     elif op == "queue":
         args = sys.argv[2:]
         task = ""
@@ -200,7 +205,9 @@ if __name__ == '__main__':
         if int(ret) == 0:
             logger.log("INFO", "main", "put into queue task:"+task+" succeeded")
         else:
+            print(op+" "+task+" failed")
             logger.log("ERROR", "main", "put into queue task: "+task+" failed")
+            sys.exit(1)
     elif op == "execute":
         logger.log("INFO", "main", "execute")
         start = time()
@@ -210,7 +217,9 @@ if __name__ == '__main__':
             logger.log("INFO", "main", "execution succeeded in "+str(end-start)+" seconds")
             os.remove('/tmp/task.txt')
         else:
+            print(op+" failed")
             logger.log("ERROR", "main", "execution failed")
+            sys.exit(1)
     elif op == "load":
         src = sys.argv[2]
         dst = sys.argv[3]
@@ -221,7 +230,9 @@ if __name__ == '__main__':
         if int(ret) == 0:
             logger.log("INFO", "main", "load succeeded in "+str(end-start)+" seconds")
         else:
+            print(op+" "+src+" to "+dst+" failed")
             logger.log("ERROR", "main", "load failed")
+            sys.exit(1)
     elif op == "dump":
         src = sys.argv[2]
         dst = sys.argv[3]
@@ -232,7 +243,9 @@ if __name__ == '__main__':
         if int(ret) == 0:
             logger.log("INFO", "main", "dump succeeded in "+str(end-start)+" seconds")
         else:
+            print(op+" "+src+" to "+dst+" failed")
             logger.log("ERROR", "main", "dump failed")
+            sys.exit(1)
     elif op == "state":
         ofile = sys.argv[2]
 

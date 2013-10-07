@@ -82,8 +82,7 @@ class Amfora(LoggingMixIn, Operations):
         if apath not in self.meta:
             self.meta[apath] = self.getattr(apath, None)
         #if the file data is not local, copy it to local storage first
-        hvalue = misc.hash(apath)
-        if hvalue not in self.data:
+        if apath not in self.data:
             ip = self.meta[apath]['location']
             logger.log("INFO", "READ", "read sent to remote server "+apath+" "+ip)
             packet = Packet(apath, "READ", {}, {}, 0, [ip], [0,0])
@@ -92,10 +91,10 @@ class Amfora(LoggingMixIn, Operations):
             if not rpacket.data:
                 logger.log("ERROR", "READ", "remote read on "+path+" failed on "+ip)
             else:
-                self.data[hvalue] = rpacket.data[hvalue]
+                self.data[apath] = rpacket.data[apath]
         #assembe the multicast packet
         ddict = dict()
-        ddict[hvalue] = self.data[hvalue]
+        ddict[apath] = self.data[apath]
         mdict = dict()
         mdict[apath] = self.meta[apath]
         packet=Packet(apath, "MULTICAST", mdict, ddict, 0, slist, None)
@@ -151,7 +150,7 @@ class Amfora(LoggingMixIn, Operations):
         for m in rpacket.meta:
             if rpacket.meta[m]['location'] not in gdict:
                 gdict[rpacket.meta[m]['location']] = []
-            gdict[rpacket.meta[m]['location']].append(rpacket.meta[m]['key'])
+            gdict[rpacket.meta[m]['location']].append(m)
         self.meta.update(rpacket.meta)    
         packet = Packet(apath, "GATHER", {}, {}, 0, slist, gdict)    
         rpacket = tcpclient.sendallpacket(packet)
@@ -174,20 +173,25 @@ class Amfora(LoggingMixIn, Operations):
         apath = path[len(mountpoint):]
         logger.log("INFO", "SCATTER", "scatter "+path+" "+apath)
         ret, data, meta = self.gather(path, algo)
+        klist = list(sorted(meta.keys()))
+        klist.reverse()
         #keep part of the data local
         num_files = math.ceil(len(meta)/len(slist))
         logger.log("INFO", "SCATTER", "This node keeps "+str(num_files)+" files")    
-
+        logger.log("INFO", "SCATTER", str(klist))
         for i in range(num_files):
-            k, v = meta.popitem()
-            data.pop(v['key'])
-
-        packet=Packet(apath, "SCATTER", meta, data, 0, slist, None)
+            k = klist.pop()
+            v = meta.pop(k)
+            data.pop(k)
+            logger.log("INFO", "SCATTER", "this node keeps "+k)
+        packet=Packet(apath, "SCATTER", meta, data, 0, slist, klist)
         rpacket = tcpclient.sendallpacket(packet)
         if rpacket.ret != 0:
             logger.log("ERROR", "SCATTER", "allgathering path: "+apath+" failed")
             return 1
         else:
+            print(str(rpacket.meta))
+            self.meta.update(rpacket.meta)
             logger.log("INFO", "SCATTER", "allgathering path: "+apath+" finished")
             return 0
 
@@ -220,7 +224,7 @@ class Amfora(LoggingMixIn, Operations):
         for m in nmeta:
             if nmeta[m]['location'] not in ndict:
                 ndict[nmeta[m]['location']] = []
-            ndict[nmeta[m]['location']].append(nmeta[m]['key'])
+            ndict[nmeta[m]['location']].append(m)
         #assemble the shuffle packet
         logger.log("INFO", "SHUFFLE", str(ndict))    
         packet=Packet(apath, "SHUFFLE", {}, {}, 0, slist, [ndict, dpath])
@@ -284,13 +288,13 @@ class Amfora(LoggingMixIn, Operations):
             apath = '/'
 
         if src[:len(mountpoint)] != mountpoint:
-            logger.log("ERROR", "LOAD", src[:len(mountpoint)]+" is not the mountpint")    
+            logger.log("ERROR", "DUMP", src[:len(mountpoint)]+" is not the mountpint")    
             return 1
         if apath not in self.meta:
-            logger.log("ERROR", "LOAD", "direcotry "+apath+" does not exist")    
+            logger.log("ERROR", "DUMP", "direcotry "+apath+" does not exist")    
             return 1
         if not os.path.exists(dst):
-            logger.log("ERROR", "LOAD", "directory: "+dst+" does not exist")
+            logger.log("ERROR", "DUMP", "directory: "+dst+" does not exist")
             return 1
 
         tcpclient = TCPClient()
@@ -299,7 +303,7 @@ class Amfora(LoggingMixIn, Operations):
         basename = os.path.basename(src)
         dirname = os.path.join(dst, basename)
         if os.path.exists(dirname):
-            logger.log("ERROR", "LOAD", "directory: "+dirname+" exists")
+            logger.log("ERROR", "DUMP", "directory: "+dirname+" exists")
             return 1
         else:
             os.mkdir(dirname)
@@ -376,8 +380,7 @@ class Amfora(LoggingMixIn, Operations):
         self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
                                      st_size=0, st_ctime=time(), st_mtime=time(), 
                                      st_atime=time(), location=localip, key=misc.hash(path))
-        hvalue = misc.hash(path)
-        self.cdata[hvalue]=b'' 
+        self.cdata[path]=b'' 
         self.fd += 1
         return self.fd
 
@@ -477,11 +480,9 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         logger.log("INFO", "READ", path+", "+str(size)+", "+str(offset))
-        hvalue = misc.hash(path)
-        if hvalue in self.cdata:
-            return bytes(self.cdata[hvalue][offset:offset + size])
-        elif hvalue in self.data:
-            return bytes(self.data[hvalue][offset:offset + size])
+
+        if path in self.data:
+            return bytes(self.data[path][offset:offset + size])
         else:
             ip = self.meta[path]['location']
             logger.log("INFO", "READ", "read sent to remote server "+path+" "+ip)
@@ -492,8 +493,8 @@ class Amfora(LoggingMixIn, Operations):
                 logger.log("ERROR", "READ", "remote read on "+path+" failed on "+ip)
                 return None
             else:
-                self.data[hvalue] = rpacket.data[hvalue]
-                return self.data[hvalue][offset:offset + size]
+                self.data[path] = rpacket.data[path]
+                return self.data[path][offset:offset + size]
 
     def readdir(self, path, fh):
         global logger
@@ -542,9 +543,9 @@ class Amfora(LoggingMixIn, Operations):
         else:    
             self.cmeta[new] = self.getattr(old, None)
  
-        if oldhash in self.cdata:
-            self.cdata[newhash] = self.cdata[oldhash]
-            self.cdata.pop(oldhash)
+        if old in self.cdata:
+            self.cdata[new] = self.cdata[old]
+            self.cdata.pop(old)
         else:
             ip = self.cmeta[new]['location']
             logger.log("INFO", "READ", "read sent to remote server "+old+" "+ip)
@@ -555,7 +556,7 @@ class Amfora(LoggingMixIn, Operations):
                 logger.log("ERROR", "READ", "remote read on "+path+" failed on "+ip)
                 return None
             else:
-                self.cdata[newhash] = rpacket.data[oldhash]
+                self.cdata[new] = rpacket.data[old]
 
         self.cmeta[new]['key'] = misc.hash(new)
         self.cmeta[new]['location'] = localip
@@ -597,8 +598,8 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         logger.log("INFO", "truncate", path+", "+str(length))
-        hvalue = misc.hash(path)
-        if hvalue in self.cdata:
+
+        if path in self.cdata:
             self.cdata[path] = self.cdata[path][:length]
             self.cmeta[path]['st_size'] = length
         else:
@@ -653,11 +654,10 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
-        hvalue = misc.hash(path)
         #write to the right place
-        if hvalue in self.cdata:
-            self.cdata[hvalue] = self.cdata[hvalue][:offset]+data
-            self.data[hvalue] = self.data[hvalue][:offset]+data
+        if path in self.cdata:
+            self.cdata[path] = self.cdata[path][:offset]+data
+            self.data[path] = self.data[path][:offset]+data
         else:
             print("write sent to remote server")
             #ip = misc.findserver(path)
@@ -684,9 +684,9 @@ class Amfora(LoggingMixIn, Operations):
         global localip
         logger.log("INFO", "RELEASE", path)
         ip = misc.findserver(path)
-        hvalue = misc.hash(path)
+
         if path in self.cmeta:
-            self.data[hvalue] = self.cdata[hvalue]
+            self.data[path] = self.cdata[path]
             if ip == localip:
                 self.meta[path] = self.cmeta[path]
                 return 0
@@ -703,8 +703,8 @@ class Amfora(LoggingMixIn, Operations):
                 if rpacket.ret != 0:
                     logger.log("ERROR", "RELEASE", path+" failed")
                 return rpacket.ret    
-        elif hvalue in self.data:
-             self.data.pop(hvalue)
+        elif path in self.data:
+             self.data.pop(path)
         else:
             return 0
 
@@ -769,10 +769,10 @@ class Amfora(LoggingMixIn, Operations):
     def local_read(self, path, size, offset):
         global logger
         logger.log("INFO", "local_read", path+", "+str(offset)+", "+str(size))
-        hvalue = misc.hash(path)
-        if hvalue in self.data:
+
+        if path in self.data:
             tempdict = defaultdict(bytes)
-            tempdict[hvalue] = self.data[hvalue]
+            tempdict[path] = self.data[path]
             return tempdict
         else:
             return None
@@ -819,11 +819,11 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         logger.log("INFO", "local_remove", path)
-        hvalue = misc.hash(path)
-        if hvalue not in self.data:
+        
+        if path not in self.data:
             return 1
         else:
-            self.data.pop(hvalue)
+            self.data.pop(path)
             return 0
 
     def local_rmmeta(self, path):    
@@ -872,10 +872,10 @@ class Amfora(LoggingMixIn, Operations):
             dstf = os.path.join(dst, basename)
             self.create(dstf, 33188)
             fd = open(f, 'rb')
-            hvalue = misc.hash(dstf)
-            self.cdata[hvalue] = fd.read()
+            
+            self.cdata[dstf] = fd.read()
             fd.close()
-            self.cmeta[dstf]['st_size'] = len(self.cdata[hvalue])
+            self.cmeta[dstf]['st_size'] = len(self.cdata[dstf])
             self.release(dstf, 0)
         logger.log("INFO", "local_load", "finished loading "+str(filel)+" to "+dst)
     def local_dump(self, pairl):
@@ -884,7 +884,7 @@ class Amfora(LoggingMixIn, Operations):
         for p in pairl:
             hvalue, fname = p
             fd = open(fname, 'wb')
-            fd.write(self.data[hvalue])
+            fd.write(self.data[fname])
             fd.close()
         logger.log("INFO", "local_dump", "finished dumping")    
 
@@ -1066,11 +1066,15 @@ class TCPClient():
                 num_files = math.ceil(len(ol)*len(meta)/(len(packet.tlist)-1))
                 mdict = {}
                 ddict = {}
+                klist = list(sorted(packet.misc))
+                oklist = []
                 for i in range(num_files):
-                    k, v = meta.popitem()
-                    mdict[k] = v
-                    ddict[v['key']] = data.pop(v['key'])
-                op = Packet(packet.path, packet.op, mdict, ddict, packet.ret, ol, packet.misc)    
+                    k = klist.pop()
+                    packet.misc.remove(k)
+                    mdict[k] = meta.pop(k)
+                    ddict[k] = data.pop(k)
+                    oklist.append(k)
+                op = Packet(packet.path, packet.op, mdict, ddict, packet.ret, ol, sorted(oklist))    
             elif packet.op == "EXECUTE":
                 taskl = []
                 num_tasks = math.ceil(len(ol)*len(packet.misc)/len(packet.tlist))
@@ -1098,7 +1102,10 @@ class TCPClient():
                 retdict[ip] = b''
             nextip = misc.nextip()
             logger.log("INFO", "TCPclient_sendallpacket()", "Shuffle: "+str(packet.misc))
-            ddict = misc.shuffle(packet.misc[0][localip])
+            if localip in packet.misc[0]:
+                ddict = misc.shuffle(packet.misc[0][localip])
+            else:
+                ddict = misc.shuffle(dict())
             logger.log("INFO", "TCPclient_sendallpacket()", "Shuffle ddict: "+str(ddict))
             retdict[localip] = ddict.pop(localip)
 
@@ -1211,9 +1218,8 @@ class ShuffleServer(threading.Thread):
         for k in self.retdict:
             temp.extend(self.retdict[k])
             logger.log("INFO", "ShuffleServer_run()", "processing record from "+k)
-        hvalue = misc.hash(fname)    
-        amfora.cdata[hvalue] = bytes(temp)
-        amfora.cmeta[fname]['st_size'] = len(amfora.cdata[hvalue])
+        amfora.cdata[fname] = bytes(temp)
+        amfora.cmeta[fname]['st_size'] = len(amfora.cdata[fname])
         amfora.release(fname, 0)
         logger.log("INFO", "ShuffleServer_run()", "shuffle finished")        
 
@@ -1519,16 +1525,22 @@ class TCPworker(threading.Thread):
                 #keep part of the data local
                 num_files = math.ceil(len(packet.meta)/len(packet.tlist))
                 logger.log("INFO", "SCATTER", "This node keeps "+str(num_files)+" files")    
+                rmeta = dict()
                 for i in range(num_files):
-                    k, v = packet.meta.popitem()
+                    k = packet.misc.pop()
+                    v = packet.meta.pop(k)
                     amfora.meta[k] = v
-                    amfora.data[v['key']] = packet.data.pop(v['key'])
-
+                    amfora.meta[k]['location'] = localip
+                    amfora.data[k] = packet.data.pop(k)
+                    amfora.cdata[k] = amfora.data[k]
+                    rmeta[k] = amfora.meta[k]
+                    logger.log("INFO", "SCATTER", "This node keeps "+k)
                 tcpclient = TCPClient()
                 rpacket = tcpclient.sendallpacket(packet)
                 if rpacket.ret != 0:
                     logger.log("ERROR", "SCATTER", "scattering dir: "+path+" failed")
                 rpacket.tlist = [remoteip]    
+                rpacket.meta.update(rmeta)
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
                 conn.close()
             elif packet.op == 'SHUFFLE':
@@ -1823,7 +1835,7 @@ class CollectiveThread(threading.Thread):
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         elif self.packet.op == "SCATTER":
             self.packet.ret = self.packet.ret | 0
-            self.packet.meta = {}
+            #self.packet.meta = {}
             self.packet.data = {}
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         elif self.packet.op == "SHUFFLE":
