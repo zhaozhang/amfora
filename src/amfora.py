@@ -1748,7 +1748,7 @@ class Misc():
         return hdict        
 
     def readtask(self):
-        fd = open("/tmp/task.txt", 'r')
+        fd = open("/tmp/amfora-task.txt", 'r')
         lines = fd.readlines()
         taskl = []
         for l in lines:

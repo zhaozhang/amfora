@@ -107,7 +107,7 @@ class AMFSclient():
         return ret
     def queue(self, task):
         #ret = self.tcpclient.sendmsg(task, "QUEUE")
-        fd = open('/tmp/task.txt', 'a+')
+        fd = open('/tmp/amfora-task.txt', 'a+')
         fd.write(task.strip(' ')+'\n')
         fd.close()
         return 0
@@ -216,7 +216,7 @@ if __name__ == '__main__':
         end  = time()
         if int(ret) == 0:
             logger.log("INFO", "main", "execution succeeded in "+str(end-start)+" seconds")
-            os.remove('/tmp/task.txt')
+            os.remove('/tmp/amfora-task.txt')
         else:
             print(op+" failed")
             logger.log("ERROR", "main", "execution failed")
