@@ -34,9 +34,9 @@ class Logger():
         self.fd = open(logfile, "w")
 
     def log(self, info, function, message):
-        #self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
-        #self.fd.flush()
-        print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
+        self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
+        self.fd.flush()
+        #print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
 
 if not hasattr(__builtins__, 'bytes'):
     bytes = str
@@ -1923,7 +1923,7 @@ if __name__ == '__main__':
         exit(1)
         
     global logger
-    logger = Logger("/tmp/amfs-fuse.log")
+    logger = Logger("/tmp/amfora-fuse.log")
     global mountpoint
     mountpoint = argv[1]
     global localip

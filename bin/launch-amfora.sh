@@ -24,7 +24,7 @@ fi
 
 pwd=`pwd`
 cd ${AMFORA_HOME}
-src/amfora.py ${mount} ${file} ${hostip} >> /tmp/amfora.log 2>&1 &
+src/amfora.py ${mount} ${file} ${ip} >> /tmp/amfora.log 2>&1 &
 echo $! > pid
 
 cd $pwd

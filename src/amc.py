@@ -5,7 +5,7 @@ from collections import defaultdict
 from errno import ENOENT
 from stat import S_IFDIR, S_IFLNK, S_IFREG, S_ISDIR, S_ISREG
 from sys import argv, exit
-from time import time, sleep
+from time import time, sleep, strftime, gmtime
 
 import socket
 import sys
@@ -126,7 +126,8 @@ class AMFSclient():
     
 if __name__ == '__main__':
     global logger
-    logger = Logger("/tmp/amfora-client.log")
+    stamp=strftime("%Y-%m-%d-%H:%M:%S", gmtime())
+    logger = Logger("/tmp/amfora-client.log."+stamp)
     logger.log("INFO", "main", "AMFORA client start")
     client = AMFSclient()
     op = sys.argv[1]
