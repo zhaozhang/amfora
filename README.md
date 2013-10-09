@@ -18,9 +18,11 @@ Author: Zhao Zhang, Daniel S. Katz
 
 Email: zhaozhang@uchicago.edu， dsk@ci.uchicago.edu
 
-Project Website: https://github.com/zhaozhang/amfora/wiki
+Project Website: http://web.ci.uchicago.edu/~zzhang/amfora/
 
 Project Hosting Page: https://github.com/zhaozhang/amphora
+
+Project Documentation Page: https://github.com/zhaozhang/amfora/wiki
 
 Project Mailing List: coming soon
 
