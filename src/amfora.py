@@ -34,9 +34,9 @@ class Logger():
         self.fd = open(logfile, "w")
 
     def log(self, info, function, message):
-        self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
-        self.fd.flush()
-        #print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
+        #self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
+        #self.fd.flush()
+        print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
 
 if not hasattr(__builtins__, 'bytes'):
     bytes = str
@@ -708,6 +708,61 @@ class Amfora(LoggingMixIn, Operations):
         else:
             return 0
 
+    def type(self, src, typedef):
+        #This type function can transform the format of a given file
+        #Supported tranformations are:
+        #File-to-row_table, file-to-dir
+        #File-to-column_table, file-to-dir
+        #File-to-row_matrix, file-to-dir
+        #File-to-column_matrix, file-to-dir
+        #File-to-tile_matrix, file-to-dir
+
+        #In the current implemetation, we assume the file is local to the login node
+        global logger
+        global slist
+        global mountpoint
+        global misc
+        global ddict
+        ddict = defaultdict(bytes)
+        tcpclient = TCPClient()
+        apath = src[len(mountpoint):]
+        logger.log("INFO", "TYPE", "Transfer "+apath +" to type "+typedef)
+        
+        if src[:len(mountpoint)] != mountpoint:
+            logger.log("ERROR", "TYPE", src[:len(mountpoint)]+" is not the mountpoint")
+            return 1
+        if apath not in self.data:
+            logger.log("ERROR", "TYPE", apath+" does not exist")
+            return 1
+        elif typedef == "column_table":
+            ddict = misc.to_column_table(self.data[apath])
+        elif typedef == "row_table":
+            ddict = misc.to_row_table(self.data[apath])
+        elif typedef == "column_matrix":
+            ddict = misc.to_column_matrix(self.data[apath])
+        elif typedef == "row_matrix":
+            ddict = misc.to_row_matrix(self.data[apath])
+        elif typedef == "tile_matrix":
+            ddict = misc.to_tile_matrix(self.data[apath])
+        else:
+            logger.log("ERROR", "transformation "+typedef+" is not supported")
+
+        basename = os.path.basename(apath)
+        dirname = os.path.dirname(apath)
+        if dirname == '/':
+            dirname = ''
+        dirname = dirname+'/.'+basename+"_"+typedef    
+        if dirname not in self.meta:
+            self.mkdir(dirname, self.meta['/']['st_mode'])
+        klist = list(sorted(ddict.keys()))
+        for k in klist:
+            fname = os.path.join(dirname, k)
+            self.create(fname, 33188)
+            self.cdata[fname] = ddict.pop(k)
+            self.cmeta[fname]['st_size'] = len(self.cdata[fname])
+            self.release(fname, 0)
+        return 0
+    
     def local_chmod(self, path, mode):
         global logger
         logger.log("INFO", "local_chmod", path+", "+str(mode))
@@ -1684,7 +1739,13 @@ class Interfaceserver(threading.Thread):
                 ret = amfora.dump(src, dst)
                 conn.send(bytes(str(ret), "utf8"))
                 conn.close()
-
+            elif el[1] == 'TYPE':
+                src = el[0]
+                typedef = el[2]
+                ret = amfora.type(src, typedef)
+                conn.send(bytes(str(ret), "utf8"))
+                conn.close()
+            
 
 class Misc():
     def __init__(self):
@@ -1755,7 +1816,60 @@ class Misc():
             task = Task(l.strip('\n'))
             taskl.append(task)
         return taskl
-    
+
+    def to_column_table(self, data):
+        ddict = defaultdict(bytes)
+        rows = data.split(b'\n')
+        if len(rows) == 0:
+            return ddict
+        columns = len(rows[0].split(b'\t'))
+        for i in range(columns):
+            ddict[str(i)] = bytearray()
+        for row in rows[:len(rows)-1]:
+            elist = row.strip(b'\n').split(b'\t')
+            for i in range(len(elist)):
+                ddict[str(i)].extend(elist[i]+b'\n')
+        return ddict        
+
+    def to_column_matrix(self, data):
+        global slist
+        ddict = defaultdict(bytes)
+        rows = data.split(b'\n')
+        if len(rows) == 0:
+            return ddict
+        columns = len(rows[0].split(b'\t'))
+        num_col = math.ceil(columns/len(slist))
+        for i in range(len(slist)):
+            ddict[str(i)] = bytearray()
+        for row in rows[:len(rows)-1]:
+            elist = row.strip(b'\n').split(b'\t')
+            row_tag = 0
+            for i in range(len(elist)):
+                key = str(int(i/num_col))
+                ddict[key].extend(elist[i])
+                row_tag = row_tag+1
+                if row_tag < num_col:
+                    ddict[key].extend(b'\t')
+                else:
+                    ddict[key].extend(b'\n')
+                    row_tag = 0
+        return ddict
+
+    def to_row_matrix(self, data):
+        global slist
+        ddict = defaultdict(bytes)
+        rows = data.split(b'\n')
+        if len(rows) == 0:
+            return ddict
+
+        num_rows = math.ceil((len(rows)-1)/len(slist))
+        for i in range(len(slist)):
+            ddict[str(i)] = bytearray()
+        for i in range(len(rows)-1):
+            key = str(int(i/num_rows))
+            ddict[key].extend(rows[i]+b'\n')
+        return ddict
+            
 class CollectiveThread(threading.Thread):
     def __init__(self, server, rdict, packet):
         threading.Thread.__init__(self)
@@ -1945,7 +2059,7 @@ if __name__ == '__main__':
         line = fd.readline()
         if not line:
             break
-        ip, port = line.strip('\n').split(':')
+        ip = line.strip('\n')
         slist.append(ip)
     logger.log("INFO", "main", "Metadata Server List: "+str(slist))
     

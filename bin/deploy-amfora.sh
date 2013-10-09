@@ -17,6 +17,8 @@ if [ "${AMFORA_HOME}" = "" ];then
     exit
 fi
 
+tar cf amfora.tar bin etc examples LICENSE README.md src
+
 localhost=`hostname`
 localip=`nslookup ${localhost} | tail -n 2 | head -n 1 | cut -d ' ' -f 2`
 for line in `grep -v '^\#' ${1}` 

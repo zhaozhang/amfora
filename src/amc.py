@@ -123,7 +123,9 @@ class AMFSclient():
     def dump(self, path, dst):
         ret = self.tcpclient.sendmsg(path, "DUMP#"+dst)
         return ret
-    
+    def type(self, path, typedef):
+        ret = self.tcpclient.sendmsg(path, "TYPE#"+typedef)
+        return ret
 if __name__ == '__main__':
     global logger
     stamp=strftime("%Y-%m-%d-%H:%M:%S", gmtime())
@@ -262,6 +264,19 @@ if __name__ == '__main__':
             s = t.key+", "+t.desc+", "+str(t.queuetime)+", "+str(t.starttime)+", "+str(t.endtime)+", "+str(t.ret)
             fd.write(s+'\n')
         fd.close()
+    elif op == "type":
+        typedef = sys.argv[2]
+        src = sys.argv[3]
+        logger.log("INFO", "main", "typedef "+src)
+        start = time()
+        ret = client.type(src, typedef)
+        end  = time()
+        if int(ret) == 0:
+            logger.log("INFO", "main", "typedef succeeded in "+str(end-start)+" seconds")
+        else:
+            print(op+" "+src+" failed")
+            logger.log("ERROR", "main", "typedef failed")
+            sys.exit(1)
 
     else:
         logger.log("ERROR", "main", "operation: "+op+" not supported")
