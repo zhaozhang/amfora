@@ -1837,6 +1837,21 @@ class Misc():
                     ddict[str(i)].extend(elist[i]+b'\n')
         return ddict        
 
+    def to_row_table(self, data):
+        global slist
+        ddict = defaultdict(bytes)
+        rows = data.split(b'\n')
+        if len(rows) == 0:
+            return ddict
+
+        num_rows = math.ceil((len(rows)-1)/len(slist))
+        for i in range(len(slist)):
+            ddict[str(i)] = bytearray()
+        for i in range(len(rows)-1):
+            key = str(int(i/num_rows))
+            ddict[key].extend(rows[i]+b'\n')
+        return ddict
+
     def to_column_matrix(self, data):
         global slist
         ddict = defaultdict(bytes)
