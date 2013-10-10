@@ -1820,15 +1820,21 @@ class Misc():
     def to_column_table(self, data):
         ddict = defaultdict(bytes)
         rows = data.split(b'\n')
+        num_rows = len(rows)-1
         if len(rows) == 0:
             return ddict
         columns = len(rows[0].split(b'\t'))
         for i in range(columns):
             ddict[str(i)] = bytearray()
+        row_tag = 0    
         for row in rows[:len(rows)-1]:
-            elist = row.strip(b'\n').split(b'\t')
+            row_tag = row_tag+1
+            elist = row.split(b'\t')
             for i in range(len(elist)):
-                ddict[str(i)].extend(elist[i]+b'\n')
+                if row_tag < num_rows:
+                    ddict[str(i)].extend(elist[i]+b'\t')
+                else:
+                    ddict[str(i)].extend(elist[i]+b'\n')
         return ddict        
 
     def to_column_matrix(self, data):
@@ -1868,6 +1874,36 @@ class Misc():
         for i in range(len(rows)-1):
             key = str(int(i/num_rows))
             ddict[key].extend(rows[i]+b'\n')
+        return ddict
+
+    def to_tile_matrix(self, data):
+        global slist
+        ddict = defaultdict(bytes)
+        rows = data.split(b'\n')
+        if len(rows) == 0:
+            return ddict
+
+        sqrt_num_files = int(math.sqrt(len(slist)))
+        for i in range(sqrt_num_files):
+            for j in range(sqrt_num_files):
+                ddict[str(i)+str(j)] = bytearray()
+
+        num_rows = int(len(rows)/sqrt_num_files)
+        columns = rows[0].split(b'\t')
+        num_columns = int(len(columns)/sqrt_num_files)
+
+        for i in range(len(rows)-1):
+            elist = rows[i].split(b'\t')
+            column_tag = 0
+            for j in range(len(elist)):
+                key = str(int(i/num_rows))+str(int(j/num_columns))
+                ddict[key].extend(elist[j])
+                column_tag = column_tag+1
+                if column_tag < num_columns:
+                    ddict[key].extend(b'\t')
+                else:
+                    ddict[key].extend(b'\n')
+                    column_tag = 0
         return ddict
             
 class CollectiveThread(threading.Thread):
