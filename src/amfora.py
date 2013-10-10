@@ -703,8 +703,8 @@ class Amfora(LoggingMixIn, Operations):
                 if rpacket.ret != 0:
                     logger.log("ERROR", "RELEASE", path+" failed")
                 return rpacket.ret    
-        elif path in self.data:
-             self.data.pop(path)
+        #elif path in self.data:
+        #     self.data.pop(path)
         else:
             return 0
 
@@ -2073,9 +2073,10 @@ class Executor():
             task = self.readyqueue.get(True, None)
             logger.log('INFO', 'Executor_run', 'running task: '+task.desc)
             task.starttime = time()
-            ret = os.system(task.desc)
+            p = subprocess.Popen(task.desc, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, stderr = p.communicate()
             task.endtime = time()
-            task.ret = ret
+            task.ret = p.returncode
             self.smap[task.desc+" "+str(task.key)] = 0
             #self.fqueue.append(task)
             logger.log('INFO', 'Executor_run', 'finishing task: '+task.desc)
