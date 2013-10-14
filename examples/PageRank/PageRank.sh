@@ -25,4 +25,4 @@ do
 done
 src/amc.py execute
 
-cat /tmp/amfora/result/* | sort -nrk 1 > /tmp/amfora/new-score.txt
+cat /tmp/amfora/result/* | sort -nk 1 > /tmp/amfora/new-score.txt
