@@ -24,6 +24,6 @@ if __name__=="__main__":
         kvdict[pageid].append(float(score))    
 
     for k in kvdict:
-        print(k+'\t'+str(sum(kvdict[k])))
+        print("%s\t%.8f" % ( k, sum(kvdict[k])))
 
         
