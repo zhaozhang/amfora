@@ -16,7 +16,7 @@ do
     mkdir /tmp/amfora/temp-${ID}
     for file in `ls /tmp/amfora/data`
     do
-	src/amc.py queue "examples/PageRank/bin/distribution.py /tmp/amfora/data/${file} /tmp/amfora/data/score.txt > /tmp/amfora/temp-${ID}/${file}"
+	src/amc.py queue "examples/PageRank/bin/distribution.py /tmp/amfora/data/${file} /tmp/amfora/score-${ID}.txt > /tmp/amfora/temp-${ID}/${file}"
     done
     src/amc.py execute
 
@@ -30,11 +30,10 @@ do
     done
     src/amc.py execute
 
-    cat /tmp/amfora/result-${ID}/* | sort -nk 1 > /tmp/amfora/score-${ID}.txt
+    newID=`expr ${ID} + 1`	
+    cat /tmp/amfora/result-${ID}/* | sort -nk 1 > /tmp/amfora/score-${newID}.txt
     
-    if [ ${ID} -gt 0 ]; then
-	prevID=`expr ${ID} - 1`
-	Converge=`diff /tmp/amfora/score-${ID}.txt /tmp/amfora/score-${prevID}.txt | echo $?`
-
-    ID=`expr ${ID} + 1`	
+    diff /tmp/amfora/score-${ID}.txt /tmp/amfora/score-${newID}.txt
+    Converge=$?
+    ID=`expr ${ID} + 1`
 done
