@@ -36,3 +36,4 @@ fuse 2.8.5 or later
 fusepy module which provides the python bindings (https://github.com/terencehonles/fusepy). The fusepy module is included in the package.
 
 #Installation
+Please refer to [Quick Start](https://github.com/zhaozhang/amfora/wiki/Amfora-Quickstart)
