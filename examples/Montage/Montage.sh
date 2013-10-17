@@ -19,7 +19,7 @@ mImgtbl /tmp/amfora/projdir /tmp/amfora/images.tbl
 
 mOverlaps /tmp/amfora/images.tbl /tmp/amfora/diffs.tbl
 
-cat /tmp/amfora/diffs.tbl | awk '{if(NR>2) printf("/home/zhaozhang/Montage/Montage_v3.3/bin/mDiffFit -n /tmp/amfora/projdir/%s /tmp/amfora/projdir/%s /tmp/amfora/diffdir/diff-%0.6d.%0.6d.fits /tmp/amfora/template.hdr > /tmp/amfora/statdir/stats-diff.%0.6d.%0.6d.fits\n", $3, $4, $1, $2, $1, $2)}' > /tmp/amfora-task.txt
+cat /tmp/amfora/diffs.tbl | awk '{if(NR>2) printf("export PATH=/home/zhaozhang/Montage/Montage_v3.3/bin:${PATH}; mDiffFit -n /tmp/amfora/projdir/%s /tmp/amfora/projdir/%s /tmp/amfora/diffdir/diff-%0.6d.%0.6d.fits /tmp/amfora/template.hdr > /tmp/amfora/statdir/stats-diff.%0.6d.%0.6d.fits\n", $3, $4, $1, $2, $1, $2)}' > /tmp/amfora-task.txt
 
 src/amc.py execute
 
