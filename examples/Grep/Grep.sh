@@ -1,5 +1,5 @@
 #!/bin/bash
-cp -r examples/grep/data /tmp/amfora
+cp -r examples/Grep/data /tmp/amfora
 amc.py scatter /tmp/amfora/data
 
 mkdir /tmp/amfora/temp
@@ -9,4 +9,5 @@ do
 done"
 src/amc.py execute
 
-cat /tmp/amfora/temp/* 
+cat /tmp/amfora/temp/* > /tmp/amfora/result.txt
+cat /tmp/amfora/result.txt
