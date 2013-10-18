@@ -11,7 +11,7 @@ src/amc.py scatter /tmp/amfora/rawdir
 
 for file in `ls /tmp/amfora/rawdir` 
 do
-   src/amc.py queue "/home/zhaozhang/Montage/Montage_v3.3/bin/mProjectPP -X /tmp/amfora/rawdir/${file} /tmp/amfora/projdir/hdu0_${file} /tmp/amfora/template.hdr" 
+   src/amc.py queue "/home/zhaozhang/Montage/Montage_v3.3/bin/mProjectPP /tmp/amfora/rawdir/${file} /tmp/amfora/projdir/hdu0_${file} /tmp/amfora/template.hdr" 
 done
 src/amc.py execute
 
@@ -19,7 +19,7 @@ mImgtbl /tmp/amfora/projdir /tmp/amfora/images.tbl
 
 mOverlaps /tmp/amfora/images.tbl /tmp/amfora/diffs.tbl
 
-cat /tmp/amfora/diffs.tbl | awk '{if(NR>2) printf("export PATH=/home/zhaozhang/Montage/Montage_v3.3/bin:${PATH}; mDiffFit -n /tmp/amfora/projdir/%s /tmp/amfora/projdir/%s /tmp/amfora/diffdir/diff-%0.6d.%0.6d.fits /tmp/amfora/template.hdr > /tmp/amfora/statdir/stats-diff.%0.6d.%0.6d.fits\n", $3, $4, $1, $2, $1, $2)}' > /tmp/amfora-task.txt
+cat /tmp/amfora/diffs.tbl | awk '{if(NR>2) printf("export PATH=/home/zhaozhang/Montage/Montage_v3.3/bin:${PATH}; mDiffFit -n /tmp/amfora/projdir/%s /tmp/amfora/projdir/%s /tmp/amfora/diffdir/diff.%0.6d.%0.6d.fits /tmp/amfora/template.hdr > /tmp/amfora/statdir/stats-diff.%0.6d.%0.6d.fits\n", $3, $4, $1, $2, $1, $2)}' > /tmp/amfora-task.txt
 
 src/amc.py execute
 
@@ -32,6 +32,8 @@ mBgModel /tmp/amfora/images.tbl /tmp/amfora/fits.tbl /tmp/amfora/corrections.tbl
 examples/Montage/bin/gen-back-task.py /tmp/amfora/images.tbl /tmp/amfora/corrections.tbl > /tmp/amfora-task.txt
 src/amc.py execute
 
-mAdd -p /tmp/amfora/corrdir /tmp/amfora/images.tbl /tmp/amfora/template.hdr /tmp/amfora/final/m101_corrected.fits
+mImgtbl /tmp/amfora/corrdir /tmp/amfora/corr-images.tbl
+
+mAdd -n -p /tmp/amfora/corrdir /tmp/amfora/corr-images.tbl /tmp/amfora/template.hdr /tmp/amfora/final/m101_corrected.fits
 
 mJPEG -gray /tmp/amfora/final/m101_corrected.fits 0s max gaussian-log -out /tmp/amfora/final/m101_corrected.jpg
