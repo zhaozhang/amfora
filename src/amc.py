@@ -36,6 +36,16 @@ class Logger():
         self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
         self.fd.flush()
 
+class Packet():
+    def __init__(self, path, op, meta, data, ret, tlist, misc):
+        self.path = path
+        self.op = op
+        self.meta = meta
+        self.data = data
+        self.ret = ret
+        self.tlist = tlist
+        self.misc = misc
+        
 class TCPclient():
     def init(self, ip):
         global logger
@@ -57,23 +67,29 @@ class TCPclient():
     def sendmsg(self, filename, msg):
         global logger
         logger.log("INFO", "TCPclient_sendmsg", filename+", "+msg)
+        psize = 16
+        bufsize = 1048576
         size=1024
         ip = '127.0.0.1'
 
         try:
             s = self.init(ip)            
             s.send(bytes(filename+'#'+msg, "utf8"))
-            if msg == 'STATE':
-                ret = s.recv(10)
-                qsize = int(ret.decode("utf8").strip('\0'))
-                temp = b''
-                while len(temp) < qsize:
-                    data = s.recv(qsize-len(temp))
-                    temp = temp+data                
-                ret =pickle.loads(temp)
-                s.send(bytes('0', 'utf8'))
-            else:
-                ret = s.recv(size)
+
+            ret = s.recv(psize)
+            qsize = int(ret.decode("utf8").strip('\0'))
+            s.send(bytes("1", 'utf8'))
+            temp = b''
+            rect = 0
+            while rect < qsize:
+                if qsize - rect > bufsize:
+                    data = s.recv(self.bufsize)
+                else:    
+                    data = s.recv(qsize-rect)
+                rect = rect + len(data)    
+                temp = temp+data                
+            ret = pickle.loads(temp)
+            #s.send(bytes('0', 'utf8'))
 
         except socket.error as msg:
             logger.log("ERROR", "TCPclient_sendmsg", "Socket Exception: "+str(msg))
@@ -81,10 +97,7 @@ class TCPclient():
             logger.log("ERROR", "TCPclient_sendmsg", "Otehr Exception: "+str(msg))
         finally:
             s.close()
-            if msg == 'STATE':
-                return ret
-            else:
-                return ret.decode("utf8").strip('\0')
+            return ret
         
 class AMFSclient():
     def __init__(self):
@@ -140,7 +153,7 @@ if __name__ == '__main__':
         start = time()
         ret = client.multi(path, algo)
         end = time()
-        if int(ret) == 0:
+        if ret.ret == 0:
             logger.log("INFO", "main", "multicast "+path+" succeeded in "+str(end-start)+" seconds")
         else:
             logger.log("ERROR", "main", "multicast "+path+" failed")
@@ -151,7 +164,7 @@ if __name__ == '__main__':
         start = time()
         ret = client.gather(path, algo)
         end = time()
-        if int(ret) == 0:
+        if ret.ret == 0:
             logger.log("INFO", "main", "gather "+path+" succeeded in "+str(end-start)+" seconds")
         else:
             print(op+" "+path+" failed")
@@ -164,7 +177,7 @@ if __name__ == '__main__':
         start = time()
         ret = client.allgather(path, algo)
         end = time()
-        if int(ret) == 0:
+        if ret.ret == 0:
             logger.log("INFO", "main", "allgather "+path+" succeeded in "+str(end-start)+" seconds")
         else:
             print(op+" "+path+" failed")
@@ -177,7 +190,7 @@ if __name__ == '__main__':
         start = time()
         ret = client.scatter(path, algo)
         end = time()
-        if int(ret) == 0:
+        if ret.ret == 0:
             logger.log("INFO", "main", "scatter "+path+" succeeded in "+str(end-start)+" seconds")
         else:
             print(op+" "+path+" failed")
@@ -191,7 +204,7 @@ if __name__ == '__main__':
         start = time()
         ret = client.shuffle(src, algo, dst)
         end = time()
-        if int(ret) == 0:
+        if ret.ret == 0:
             logger.log("INFO", "main", "shuffle "+src+" to "+dst+" succeeded in "+str(end-start)+" seconds")
         else:
             print(op+" "+path+" failed")
@@ -205,7 +218,7 @@ if __name__ == '__main__':
         task.strip(' ')
         logger.log("INFO", "main", "put into queue task: "+ task)
         ret = client.queue(task)
-        if int(ret) == 0:
+        if ret == 0:
             logger.log("INFO", "main", "put into queue task:"+task+" succeeded")
         else:
             print(op+" "+task+" failed")
@@ -216,11 +229,14 @@ if __name__ == '__main__':
         start = time()
         ret = client.execute()
         end  = time()
-        if int(ret) == 0:
+        if sum(ret.meta.values()) == 0:
             logger.log("INFO", "main", "execution succeeded in "+str(end-start)+" seconds")
             os.remove('/tmp/amfora-task.txt')
         else:
             print(op+" failed")
+            for task in ret.meta:
+                if ret.meta[task] != 0:
+                    print("Task: "+task+"\nStderr: "+ret.data[task].decode('utf8'))
             logger.log("ERROR", "main", "execution failed")
             sys.exit(1)
     elif op == "load":
@@ -230,7 +246,7 @@ if __name__ == '__main__':
         start = time()
         ret = client.load(src, dst)
         end  = time()
-        if int(ret) == 0:
+        if ret.ret == 0:
             logger.log("INFO", "main", "load succeeded in "+str(end-start)+" seconds")
         else:
             print(op+" "+src+" to "+dst+" failed")
@@ -243,7 +259,7 @@ if __name__ == '__main__':
         start = time()
         ret = client.dump(src, dst)
         end  = time()
-        if int(ret) == 0:
+        if ret.ret == 0:
             logger.log("INFO", "main", "dump succeeded in "+str(end-start)+" seconds")
         else:
             print(op+" "+src+" to "+dst+" failed")
@@ -271,7 +287,7 @@ if __name__ == '__main__':
         start = time()
         ret = client.type(src, typedef)
         end  = time()
-        if int(ret) == 0:
+        if ret.ret == 0:
             logger.log("INFO", "main", "typedef succeeded in "+str(end-start)+" seconds")
         else:
             print(op+" "+src+" failed")

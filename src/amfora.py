@@ -101,7 +101,7 @@ class Amfora(LoggingMixIn, Operations):
         rpacket = tcpclient.sendallpacket(packet)
         if rpacket.ret != 0:
             logger.log("ERROR", "MULTICAST", "multicasting file: "+apath+" failed")
-        return rpacket.ret
+        return rpacket
 
     def allgather(self, path, algo):
         global logger
@@ -119,10 +119,10 @@ class Amfora(LoggingMixIn, Operations):
         rpacket = tcpclient.sendallpacket(packet)
         if rpacket.ret != 0:
             logger.log("ERROR", "ALLGATHER", "allgathering path: "+apath+" failed")
-            return 1
+            return rpacket
         else:
             logger.log("INFO", "ALLGATHER", "allgathering path: "+apath+" finished")
-            return 0
+            return rpacket
             
 
     def gather(self, path, algo):
@@ -156,10 +156,11 @@ class Amfora(LoggingMixIn, Operations):
         rpacket = tcpclient.sendallpacket(packet)
         if rpacket.ret != 0:
             logger.log("ERROR", "GATHER", "gather "+path+" failed")
+            return rpacket, None, None
         else:
             self.data.update(rpacket.data)
             logger.log("INFO", "GATHER", "gather "+path+" finished")
-            return 0, rpacket.data, nmeta
+            return rpacket, rpacket.data, nmeta
 
     def scatter(self, path, algo):
         global logger
@@ -188,12 +189,11 @@ class Amfora(LoggingMixIn, Operations):
         rpacket = tcpclient.sendallpacket(packet)
         if rpacket.ret != 0:
             logger.log("ERROR", "SCATTER", "allgathering path: "+apath+" failed")
-            return 1
+            return rpacket
         else:
-            print(str(rpacket.meta))
             self.meta.update(rpacket.meta)
             logger.log("INFO", "SCATTER", "allgathering path: "+apath+" finished")
-            return 0
+            return rpacket
 
     def shuffle(self, path, algo, dst):
         global logger
@@ -231,7 +231,7 @@ class Amfora(LoggingMixIn, Operations):
         rpacket = tcpclient.sendallpacket(packet)
         if rpacket.ret != 0:
             logger.log("ERROR", "SHUFFLE", "shuffling from "+apath+" to "+dpath+" failed")
-        return rpacket.ret
+        return rpacket
         
     def load(self, src, dst):
         global logger
@@ -272,10 +272,10 @@ class Amfora(LoggingMixIn, Operations):
         rpacket = tcpclient.sendallpacket(packet)
         if rpacket.ret != 0:
             logger.log("ERROR", "LOAD", "loading "+src+" to "+dirname+" failed")
-            return 1
+            return rpacket
         else:
             logger.log("INFO", "LOAD", "loading "+src+" to "+dirname+" finished")
-            return 0
+            return rpacket
 
     def dump(self, src, dst):
         global logger
@@ -323,10 +323,10 @@ class Amfora(LoggingMixIn, Operations):
         rpacket = tcpclient.sendallpacket(packet)
         if rpacket.ret != 0:
             logger.log("ERROR", "DUMP", "dumping "+src+" to "+dirname+" failed")
-            return 1
+            return rpacket
         else:
             logger.log("INFO", "DUMP", "dumping "+src+" to "+dirname+" finished")
-            return 0
+            return rpacket
     
         
     def execute(self):
@@ -340,11 +340,11 @@ class Amfora(LoggingMixIn, Operations):
         packet=Packet("", "EXECUTE", {}, {}, 0, slist, taskl)
         rpacket = tcpclient.sendallpacket(packet)
         if sum(rpacket.meta.values()) != 0:
-            logger.log("ERROR", "EXECUTE", "execution failed")
-            return 1
+            logger.log("ERROR", "EXECUTE", "execution failed "+str(rpacket.meta)+"\n"+str(rpacket.data))
+            return rpacket
         else:
             logger.log("INFO", "EXECUTE", "execution finished "+str(rpacket.meta))
-            return 0
+            return rpacket
 
 
     '''
@@ -483,6 +483,8 @@ class Amfora(LoggingMixIn, Operations):
 
         if path in self.data:
             return bytes(self.data[path][offset:offset + size])
+        elif path in self.cdata:
+            return bytes(self.cdata[path][offset:offset+size])
         else:
             ip = self.meta[path]['location']
             logger.log("INFO", "READ", "read sent to remote server "+path+" "+ip)
@@ -657,8 +659,10 @@ class Amfora(LoggingMixIn, Operations):
         #write to the right place
         if path in self.cdata:
             self.cdata[path] = self.cdata[path][:offset]+data
+            #self.data[path] = self.data[path][:offset]+data
+        if path in self.data:
             self.data[path] = self.data[path][:offset]+data
-        else:
+        if path not in self.cdata:
             print("write sent to remote server")
             #ip = misc.findserver(path)
             #packet = Packet(path, "locate", None, None, None, ip, None)
@@ -1178,6 +1182,7 @@ class TCPClient():
             executor = Executor(packet.misc)
             executor.run()
             packet.meta.update(executor.smap)
+            packet.data.update(executor.emap)
             logger.log("INFO", "TCPclient_sendallpacket()", "finished executing: "+str(len(packet.misc))+" tasks")
         elif packet.op == "LOAD":
             global amfora
@@ -1371,9 +1376,9 @@ class TCPworker(threading.Thread):
                 logger.log("INFO", "TCPworker.sendpacket()", "send "+str(sent_iter)+" bytes")
             logger.log("INFO", "TCPworker.sendpacket()", "totally send "+str(sent)+" bytes")    
         except socket.error as msg:
-            logger.log("ERROR", "TCPworker_sendpacket()", "Socket Exception: "+str(msg))
+            logger.log("ERROR", "TCPworker.sendpacket()", "Socket Exception: "+str(msg))
         except Exception as msg:
-            logger.log("ERROR", "TCPworker_sendpacket()", "Other Exception: "+str(msg))
+            logger.log("ERROR", "TCPworker.sendpacket()", "Other Exception: "+str(msg))
         finally:
             return sent
 
@@ -1651,7 +1656,8 @@ class Interfaceserver(threading.Thread):
         self.id = workerid
         self.host = ''
         self.port = port
-        self.size = 1024
+        self.psize = 16
+        self.bufsize = 1048576
         self.server = None
 
     def open_socket(self):
@@ -1666,6 +1672,42 @@ class Interfaceserver(threading.Thread):
             logger.log("ERROR", "Interfaceserver_opensocket", msg)
             self.server = None
 
+    def sendpacket(self, sock, packet):
+        logger.log("INFO", "Interfaceserver_sendpacket()", "sending packet to "+str(packet.tlist))
+        try:
+            #dump packet into binary format
+            bpacket = pickle.dumps(packet)
+
+            #get the packet size
+            length = len(bpacket)
+            logger.log("INFO", "Interfaceserver_sendpacket()", "ready to send "+str(length)+" bytes")
+
+            #paddling the length of the packet to a 16 bytes number
+            slength = str(length)
+            while len(slength) < self.psize:
+                slength = slength + '\0'
+
+            #send the length, and wait for an ack    
+            sock.send(bytes(slength, 'utf-8'))
+            sock.recv(1)
+            
+            #send the bpacket data
+            sent = 0
+            while sent < length:
+                if length - sent > self.bufsize:
+                    sent_iter = sock.send(bpacket[sent:sent+self.bufsize])
+                else:
+                    sent_iter = sock.send(bpacket[sent:])
+                sent = sent + sent_iter
+                logger.log("INFO", "Interfaceserver_sendpacket()", "send "+str(sent_iter)+" bytes")
+            logger.log("INFO", "Interfaceserver_sendpacket()", "totally send "+str(sent)+" bytes")    
+        except socket.error as msg:
+            logger.log("ERROR", "Interfaceserver__sendpacket()", "Socket Exception: "+str(msg))
+        except Exception as msg:
+            logger.log("ERROR", "Interfaceserver_sendpacket()", "Other Exception: "+str(msg))
+        finally:
+            return sent
+
     def run(self):
         global logger
         global amfora
@@ -1675,7 +1717,7 @@ class Interfaceserver(threading.Thread):
         while True:
             conn, addr = self.server.accept()
             try:
-                data = conn.recv(self.size)
+                data = conn.recv(self.bufsize)
             except socket.error:
                 logger.log("ERROR", "Interfaceserver_run", "socket exception when receiving message "+str(socket.error))
                 break
@@ -1687,63 +1729,59 @@ class Interfaceserver(threading.Thread):
                 path = el[0]
                 algo = el[2]
                 ret = amfora.multicast(path, algo)
-                conn.send(bytes(str(ret), "utf8"))
+                self.sendpacket(conn, ret)
                 conn.close()
             elif el[1] == 'GATHER':
                 path = el[0]
                 algo = el[2]
                 ret, ddict, mdict = amfora.gather(path, algo)
-                conn.send(bytes(str(ret), "utf8"))
+                self.sendpacket(conn, ret)
                 conn.close()
             elif el[1] == 'ALLGATHER':
                 path = el[0]
                 algo = el[2]
                 ret = amfora.allgather(path, algo)
-                conn.send(bytes(str(ret), "utf8"))
+                self.sendpacket(conn, ret)
                 conn.close()
             elif el[1] == 'SCATTER':
                 path = el[0]
                 algo = el[2]
                 ret = amfora.scatter(path, algo)
-                conn.send(bytes(str(ret), "utf8"))
+                self.sendpacket(conn, ret)
                 conn.close()
             elif el[1] == 'SHUFFLE':
                 path = el[0]
                 algo = el[2]
                 dst = el[3]
                 ret = amfora.shuffle(path, algo, dst)
-                conn.send(bytes(str(0), "utf8"))
+                self.sendpacket(conn, ret)
                 conn.close()
             elif el[1] == 'EXECUTE':
                 ret = amfora.execute()
-                conn.send(bytes(str(ret), "utf8"))
+                self.sendpacket(conn, ret)
                 conn.close()
             elif el[1] == 'STATE':
-                retdict = executor.state()
-                dsize = str(len(pickle.dumps(retdict)))
-                while len(dsize) < 10:
-                    dsize = dsize + "\0"
-                conn.send(bytes(dsize, "utf8"))
-                conn.send(pickle.dumps(retdict))
-                conn.recv(1)
+                ret = executor.state()
+                self.sendpacket(conn, ret)
                 conn.close()
             elif el[1] == 'LOAD':
                 src = el[0]
                 dst = el[2]
                 ret = amfora.load(src, dst)
-                conn.send(bytes(str(ret), "utf8"))
+                self.sendpacket(conn, ret)
                 conn.close()
             elif el[1] == 'DUMP':
                 src = el[0]
                 dst = el[2]
                 ret = amfora.dump(src, dst)
-                conn.send(bytes(str(ret), "utf8"))
+                self.sendpacket(conn, ret)
                 conn.close()
             elif el[1] == 'TYPE':
                 src = el[0]
                 typedef = el[2]
                 ret = amfora.type(src, typedef)
-                conn.send(bytes(str(ret), "utf8"))
+                rpacket = Packet(src, typedef, None, None, ret, None, None)
+                self.sendpacket(conn, rpacket)
                 conn.close()
             
 
@@ -2057,6 +2095,7 @@ class Executor():
         self.queue = []
         self.fqueue = []
         self.smap = {}
+        self.emap = {}
         self.readyqueue = queue.Queue()
         self.fmap = {} #key-file, value-task
         self.tlist = tlist
@@ -2077,7 +2116,9 @@ class Executor():
             stdout, stderr = p.communicate()
             task.endtime = time()
             task.ret = p.returncode
-            self.smap[task.desc+" "+str(task.key)] = 0
+            self.smap[task.desc+" "+str(task.key)] = task.ret
+            if task.ret != 0:
+                self.emap[task.desc+" "+str(task.key)] = stderr
             #self.fqueue.append(task)
             logger.log('INFO', 'Executor_run', 'finishing task: '+task.desc)
         logger.log('INFO', 'Executor_run', 'all tasks finished')
