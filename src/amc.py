@@ -83,7 +83,7 @@ class TCPclient():
             rect = 0
             while rect < qsize:
                 if qsize - rect > bufsize:
-                    data = s.recv(self.bufsize)
+                    data = s.recv(bufsize)
                 else:    
                     data = s.recv(qsize-rect)
                 rect = rect + len(data)    
