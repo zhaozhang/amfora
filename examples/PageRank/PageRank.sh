@@ -11,7 +11,7 @@ src/amc.py multicast /tmp/amfora/score.txt
 mkdir /tmp/amfora/temp
 for file in `ls /tmp/amfora/data`
 do
-   src/amc.py queue "examples/PageRank/bin/distribution.py /tmp/amfora/data/${file} /tmp/amfora/data/score.txt > /tmp/amfora/temp/${file}"
+   src/amc.py queue "examples/PageRank/bin/distribution.py /tmp/amfora/data/${file} /tmp/amfora/score.txt > /tmp/amfora/temp/${file}"
 done
 src/amc.py execute
 
