@@ -982,6 +982,7 @@ class TCPClient():
             except socket.error as msg:
                 logger.log("ERROR", "TCPclient_init_server", msg)
                 server = None
+                sleep(0.1)
             else:
                 logger.log("INFO", "TCPclient_init_server", "server TCP socket started")
                 return server
@@ -1176,7 +1177,10 @@ class TCPClient():
             self.one_sided_sendpacket(p, 55003)
             
             while shuffleserver.is_alive():
+                sleep(0.1)
                 pass
+            server.close()
+
         elif packet.op == "EXECUTE":
             logger.log("INFO", "TCPclient_sendallpacket()", "ready to execute: "+str(len(packet.misc))+" tasks")
             executor = Executor(packet.misc)
@@ -1198,8 +1202,8 @@ class TCPClient():
         else:
             pass
         while colthread.is_alive():
+            sleep(0.1)
             pass
-            #sleep(1)
             #logger.log("INFO", "TCPclient_sendallpacket()", "waiting for colthread to finish")
         return packet    
     
