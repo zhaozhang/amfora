@@ -225,9 +225,17 @@ class Amfora(LoggingMixIn, Operations):
             if nmeta[m]['location'] not in ndict:
                 ndict[nmeta[m]['location']] = []
             ndict[nmeta[m]['location']].append(m)
+
+        #start shuffle server
+        logger.log("INFO", "SHUFFLE_START", str(slist))    
+        packet=Packet(apath, "SHUFFLE_START", {}, {}, 0, slist, [ndict, dpath])
+        rpacket = tcpclient.sendallpacket(packet)
+        if rpacket.ret != 0:
+            logger.log("ERROR", "SHUFFLE_START", "shuffling from "+apath+" to "+dpath+" failed")
+
         #assemble the shuffle packet
         logger.log("INFO", "SHUFFLE", str(ndict))    
-        packet=Packet(apath, "SHUFFLE", {}, {}, 0, slist, [ndict, dpath])
+        packet=Packet(apath, "SHUFFLE", {}, {}, 0, slist, dpath)
         rpacket = tcpclient.sendallpacket(packet)
         if rpacket.ret != 0:
             logger.log("ERROR", "SHUFFLE", "shuffling from "+apath+" to "+dpath+" failed")
@@ -1152,30 +1160,36 @@ class TCPClient():
             self.one_sided_sendpacket(op, 55000)
         
         #start shuffleserver as a thread and shuffleclient    
-        if packet.op == "SHUFFLE":
-            logger.log("INFO", "TCPclient_sendallpacket()", "ready to shuffle")
+        if packet.op == "SHUFFLE_START":
+            logger.log("INFO", "TCPclient_sendallpacket()", "ready to start shuffle")
             global amfora
             global localip
             global slist
+            global sdict
+            global shuffleserver
             retdict = defaultdict(bytes)
             for ip in slist:
                 retdict[ip] = b''
             nextip = misc.nextip()
-            logger.log("INFO", "TCPclient_sendallpacket()", "Shuffle: "+str(packet.misc))
+            logger.log("INFO", "TCPclient_sendallpacket()", "Shuffle_start: "+str(packet.misc))
             if localip in packet.misc[0]:
-                ddict = misc.shuffle(packet.misc[0][localip])
+                sdict = misc.shuffle(packet.misc[0][localip])
             else:
-                ddict = misc.shuffle(dict())
-            logger.log("INFO", "TCPclient_sendallpacket()", "Shuffle ddict: "+str(ddict))
-            retdict[localip] = ddict.pop(localip)
+                sdict = misc.shuffle(dict())
+            logger.log("INFO", "TCPclient_sendallpacket()", "Shuffle_start sdict: "+str(sdict))
+            retdict[localip] = sdict.pop(localip)
 
             s_server = self.init_server('', 55003)
             shuffleserver = ShuffleServer(s_server, retdict, packet)
-            #while not shuffleserver.is_alive():
             shuffleserver.start()
-            #while not shuffleserver.is_alive():
-            #    sleep(0.1)
-            p = Packet(packet.path, "SHUFFLETHREAD", {}, ddict, 0, [nextip], [localip, packet.misc[1]])
+
+        elif packet.op =="SHUFFLE":
+            logger.log("INFO", "TCP_sendallpacket()", "ready to shuffle")
+            global sdict
+            global localip
+            global shuffleserver
+            nextip = misc.nextip()
+            p = Packet(packet.path, "SHUFFLETHREAD", {}, sdict, 0, [nextip], [localip, packet.misc])
             #send a packet to next server
             self.one_sided_sendpacket(p, 55003)
             
@@ -1265,8 +1279,10 @@ class ShuffleServer(threading.Thread):
                     logger.log("INFO", "ShufflerServer_run()", "remained dict: "+str(tp.data))
                     if len(tp.data.keys()) > 0:
                         packet = Packet(tp.path, tp.op, tp.meta, tp.data, tp.ret, [nextip], tp.misc)
-                        tcpclient = TCPClient()
-                        tcpclient.one_sided_sendpacket(packet, 55003)
+                        shufflethread = ShuffleThread(packet)
+                        shufflethread.start()
+                        #tcpclient = TCPClient()
+                        #tcpclient.one_sided_sendpacket(packet, 55003)
 
                 except socket.error as msg:
                     logger.log("ERROR", "ShuffleServer_run()", "Socket Exception: "+str(msg))
@@ -1295,6 +1311,16 @@ class ShuffleServer(threading.Thread):
         self.server.shutdown(socket.SHUT_RDWR)
         self.server.close()
 
+class ShuffleThread(threading.Thread):
+    def __init__(self, packet):
+        threading.Thread.__init__(self)
+        self.packet = packet
+
+    def run(self):    
+        global logger
+        logger.log("INFO", "ShuffleThread", "Sending pakcet to "+str(self.packet.tlist))
+        tcpclient = TCPClient()
+        tcpclient.one_sided_sendpacket(self.packet, 55003)
 
 class TCPserver(threading.Thread):
     def __init__(self, workerid, port):
@@ -1616,9 +1642,22 @@ class TCPworker(threading.Thread):
                 rpacket.meta.update(rmeta)
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
                 conn.close()
-            elif packet.op == 'SHUFFLE':
+            elif packet.op == 'SHUFFLE_START':
                 path = packet.path
                 dst = packet.misc[1]
+                remoteip, remoteport = conn.getpeername()
+                tcpclient = TCPClient()
+                logger.log("INFO", "TCPserver_shuffle_start", str(packet.misc))
+                rpacket = tcpclient.sendallpacket(packet)
+
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "SHUFFLE_SHUFFLE_START", "start shuffling from "+path+" to "+dst+" failed")
+                rpacket.tlist = [remoteip]
+                tcpclient.one_sided_sendpacket(rpacket, 55001)    
+                conn.close()
+            elif packet.op == 'SHUFFLE':
+                path = packet.path
+                dst = packet.misc
                 remoteip, remoteport = conn.getpeername()
                 tcpclient = TCPClient()
                 logger.log("INFO", "TCPserver_shuffle", str(packet.misc))
@@ -1834,6 +1873,18 @@ class Misc():
         nextip = slist[nextindex]
         return nextip
 
+    def reorderip(self):
+        global localip
+        global slist
+        rlist = []
+        index = slist.index(localip)
+        for i in range(len(slist)-1):
+            newindex = index+i+1
+            if newindex >= len(slist):
+                newindex = newindex - len(slist)
+            rlist.append(slist[newindex])
+        return rlist
+    
     def shuffle(self, hlist):
         #hlist is a list containing the hash values in local storage
         global logger
@@ -1849,9 +1900,11 @@ class Misc():
                 logger.log("INFO", "MISC_shuffle()", "lines: "+str(len(lines)))
                 for line in lines[:len(lines)-1]:
                     #change to regular expression in next release
-                    m = re.match(b"(?P<key>\w+)\s+(?P<value>\w+)", line)
-                    k = m.group('key')
-                    v = m.group('value')
+                    #m = re.match(b"(?P<key>\w+)\s+(?P<value>\w+)", line)
+                    #k = m.group('key')
+                    #v = m.group('value')
+                    k, v = line.split()
+                    logger.log("INFO", "MISC_shuffle()", "key: "+k.decode('utf8')+" values: "+v.decode('utf8'))
                     value = zlib.adler32(k) & 0xffffffff
                     ip = slist[value%len(slist)]
                     hdict[ip].extend(line+b'\n')
@@ -2054,6 +2107,11 @@ class CollectiveThread(threading.Thread):
             #self.packet.meta = {}
             self.packet.data = {}
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
+        elif self.packet.op == "SHUFFLE_START":
+            self.packet.ret = self.packet.ret | 0
+            self.packet.meta = {}
+            self.packet.data = {}
+            logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         elif self.packet.op == "SHUFFLE":
             self.packet.ret = self.packet.ret | 0
             self.packet.meta = {}
@@ -2154,6 +2212,12 @@ if __name__ == '__main__':
 
     global misc
     misc = Misc()
+
+    global sdict
+    sdict = dict()
+
+    global shuffleserver
+    shuffleserver = None
 
     global shuffleself
     shuffleself = 0
