@@ -1169,9 +1169,12 @@ class TCPClient():
             logger.log("INFO", "TCPclient_sendallpacket()", "Shuffle ddict: "+str(ddict))
             retdict[localip] = ddict.pop(localip)
 
-            server = self.init_server('', 55003)
-            shuffleserver = ShuffleServer(server, retdict, packet)
+            s_server = self.init_server('', 55003)
+            shuffleserver = ShuffleServer(s_server, retdict, packet)
+            #while not shuffleserver.is_alive():
             shuffleserver.start()
+            #while not shuffleserver.is_alive():
+            #    sleep(0.1)
             p = Packet(packet.path, "SHUFFLETHREAD", {}, ddict, 0, [nextip], [localip, packet.misc[1]])
             #send a packet to next server
             self.one_sided_sendpacket(p, 55003)
@@ -1179,7 +1182,6 @@ class TCPClient():
             while shuffleserver.is_alive():
                 sleep(0.1)
                 pass
-            server.close()
 
         elif packet.op == "EXECUTE":
             logger.log("INFO", "TCPclient_sendallpacket()", "ready to execute: "+str(len(packet.misc))+" tasks")
@@ -1201,10 +1203,14 @@ class TCPClient():
             logger.log("INFO", "TCPclient_sendallpacket()", "finished dumping: "+str(packet.misc))
         else:
             pass
-        while colthread.is_alive():
-            sleep(0.1)
-            pass
+        #while colthread.is_alive():
+        #    sleep(0.1)
+        #    pass
             #logger.log("INFO", "TCPclient_sendallpacket()", "waiting for colthread to finish")
+        colthread.join()
+        if server:
+            server.shutdown(socket.SHUT_RDWR)
+            server.close()
         return packet    
     
 class ShuffleServer(threading.Thread):
@@ -1286,6 +1292,9 @@ class ShuffleServer(threading.Thread):
         amfora.cmeta[fname]['st_size'] = len(amfora.cdata[fname])
         amfora.release(fname, 0)
         logger.log("INFO", "ShuffleServer_run()", "shuffle finished")        
+        self.server.shutdown(socket.SHUT_RDWR)
+        self.server.close()
+
 
 class TCPserver(threading.Thread):
     def __init__(self, workerid, port):
@@ -1988,8 +1997,8 @@ class CollectiveThread(threading.Thread):
             #if len(self.packet.tlist)==1 and self.packet.tlist[0]==localip:
             #    pass
             else:
-                conn, addr = self.server.accept()
                 try:
+                    conn, addr = self.server.accept()
                     peer = conn.getpeername()[0]
                     data = conn.recv(self.psize)
                     length = int(data.decode('utf8').strip('\0'))
