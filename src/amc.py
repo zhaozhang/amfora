@@ -238,6 +238,7 @@ if __name__ == '__main__':
                 if ret.meta[task] != 0:
                     print("Task: "+task+"\nStderr: "+ret.data[task].decode('utf8'))
             logger.log("ERROR", "main", "execution failed")
+            os.remove('/tmp/amfora-task.txt')
             sys.exit(1)
     elif op == "load":
         src = sys.argv[2]
