@@ -273,7 +273,12 @@ class Amfora(LoggingMixIn, Operations):
         tlist = os.listdir(src)
         flist = []
         for f in tlist:
-            flist.append(os.path.join(src, f))
+            print(os.path.join(src, f))
+            if os.path.isdir(os.path.join(src, f)):
+                logger.log("INFO", "LOAD", "recursively load "+os.path.join(src, f)+" to "+os.path.join(mountpoint, basename))
+                self.load(os.path.join(src, f), os.path.join(mountpoint, basename))
+            else:    
+                flist.append(os.path.join(src, f))
         flist.sort()
         logger.log("INFO", "LOAD", "loading the following files "+str(flist)+" from "+src+" to "+dirname)
         packet=Packet(dirname, "LOAD", {}, {}, 0, slist, flist)
@@ -312,10 +317,16 @@ class Amfora(LoggingMixIn, Operations):
         dirname = os.path.join(dst, basename)
         if os.path.exists(dirname):
             logger.log("ERROR", "DUMP", "directory: "+dirname+" exists")
-            return 1
+            #return 1
         else:
             os.mkdir(dirname)
 
+        #recursively dumping sub-directory
+        for k in self.meta:
+            if S_ISDIR(self.meta[k]['st_mode']) and os.path.dirname(k) == apath:
+                logger.log("INFO", "DUMP", "recursively dumping "+os.path.join(mountpoint, k[1:])+" "+dirname)
+                self.dump(os.path.join(mountpoint, k[1:]), dirname)
+     
         #read metadata of the files in this dir    
         packet = Packet(apath, "READDIR", {}, {}, 0, slist, 0)
         rpacket = tcpclient.sendallpacket(packet)
@@ -1213,7 +1224,8 @@ class TCPClient():
             #global amfora
             #global localip
             logger.log("INFO", "TCPclient_sendallpacket()", "read to dump: "+str(packet.misc))
-            amfora.local_dump(packet.misc[localip])
+            if localip in packet.misc:
+                amfora.local_dump(packet.misc[localip])
             logger.log("INFO", "TCPclient_sendallpacket()", "finished dumping: "+str(packet.misc))
         else:
             pass
@@ -2120,7 +2132,7 @@ class CollectiveThread(threading.Thread):
         elif self.packet.op == "EXECUTE":
             self.packet.ret = self.packet.ret | 0
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
-        elif self.packet.op == "LOAD":
+        elif self.packet.op == "DUMP":
             self.packet.ret = self.packet.ret | 0
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         elif self.packet.op == "LOAD":
