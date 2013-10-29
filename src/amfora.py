@@ -1139,10 +1139,18 @@ class TCPClient():
 
         meta = dict(packet.meta)
         data = dict(packet.data)
+        total_tasks = 0
+        total_files = 0
+        if packet.op == "EXECUTE":
+            total_tasks = len(packet.misc)
+        elif packet.op == "SCATTER":
+            total_files = len(meta)
+        elif packet.op == "LOAD":
+            total_tasks = len(packet.misc)
 
         for ol in olist:
             if packet.op == "SCATTER":
-                num_files = math.ceil(len(ol)*len(meta)/(len(packet.tlist)-1))
+                num_files = math.ceil(len(ol)*total_files/len(packet.tlist))
                 mdict = {}
                 ddict = {}
                 klist = list(sorted(packet.misc))
@@ -1156,13 +1164,14 @@ class TCPClient():
                 op = Packet(packet.path, packet.op, mdict, ddict, packet.ret, ol, sorted(oklist))    
             elif packet.op == "EXECUTE":
                 taskl = []
-                num_tasks = math.ceil(len(ol)*len(packet.misc)/len(packet.tlist))
+                num_tasks = math.ceil(len(ol)*total_tasks/len(packet.tlist))
+                #print(str(num_tasks)+" "+str(len(ol))+" "+str(total_tasks)+" "+str(len(packet.tlist)))
                 for i in range(num_tasks):
                     taskl.append(packet.misc.pop())
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, taskl) 
             elif packet.op == "LOAD":
                 filel = []
-                num_files = math.ceil(len(ol)*len(packet.misc)/len(packet.tlist))
+                num_files = math.ceil(len(ol)*total_files/len(packet.tlist))
                 for i in range(num_files):
                     filel.append(packet.misc.pop())
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, filel)
@@ -2241,7 +2250,7 @@ if __name__ == '__main__':
         line = fd.readline()
         if not line:
             break
-        ip = line.strip('\n')
+        ip = line.strip('\n').strip()
         slist.append(ip)
     logger.log("INFO", "main", "Metadata Server List: "+str(slist))
     
