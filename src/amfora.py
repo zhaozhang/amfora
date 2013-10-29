@@ -1146,7 +1146,7 @@ class TCPClient():
         elif packet.op == "SCATTER":
             total_files = len(meta)
         elif packet.op == "LOAD":
-            total_tasks = len(packet.misc)
+            total_files = len(packet.misc)
 
         for ol in olist:
             if packet.op == "SCATTER":
@@ -1165,13 +1165,13 @@ class TCPClient():
             elif packet.op == "EXECUTE":
                 taskl = []
                 num_tasks = math.ceil(len(ol)*total_tasks/len(packet.tlist))
-                #print(str(num_tasks)+" "+str(len(ol))+" "+str(total_tasks)+" "+str(len(packet.tlist)))
                 for i in range(num_tasks):
                     taskl.append(packet.misc.pop())
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, taskl) 
             elif packet.op == "LOAD":
                 filel = []
                 num_files = math.ceil(len(ol)*total_files/len(packet.tlist))
+                print(str(num_files)+" "+str(len(ol))+" "+str(total_files)+" "+str(len(packet.tlist)))
                 for i in range(num_files):
                     filel.append(packet.misc.pop())
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, filel)
