@@ -18,6 +18,7 @@ import pickle
 import os
 import string
 import hashlib
+import shutil
 
 class Task():
     def __init__(self, desc):
@@ -231,14 +232,16 @@ if __name__ == '__main__':
         end  = time()
         if sum(ret.meta.values()) == 0:
             logger.log("INFO", "main", "execution succeeded in "+str(end-start)+" seconds")
-            os.remove('/tmp/amfora-task.txt')
+            stamp=strftime("%Y-%m-%d-%H:%M:%S", gmtime())
+            shutil.move('/tmp/amfora-task.txt', './amfora-task.txt.'+stamp+'.succeeded')
         else:
             print(op+" failed")
             for task in ret.meta:
                 if ret.meta[task] != 0:
                     print("Task: "+task+"\nStderr: "+ret.data[task].decode('utf8'))
             logger.log("ERROR", "main", "execution failed")
-            os.remove('/tmp/amfora-task.txt')
+            stamp=strftime("%Y-%m-%d-%H:%M:%S", gmtime())
+            shutil.move('/tmp/amfora-task.txt', './amfora-task.txt.'+stamp+'.failed')
             sys.exit(1)
     elif op == "load":
         src = sys.argv[2]
