@@ -173,6 +173,8 @@ class Amfora(LoggingMixIn, Operations):
         tcpclient = TCPClient()
         apath = path[len(mountpoint):]
         logger.log("INFO", "SCATTER", "scatter "+path+" "+apath)
+        if apath not in self.meta:
+            return Packet(apath, "SCATTER", None, None, 1, None, None)
         ret, data, meta = self.gather(path, algo)
         klist = list(sorted(meta.keys()))
         klist.reverse()
@@ -599,7 +601,18 @@ class Amfora(LoggingMixIn, Operations):
         #Step 2, remove all file data on all nodes
         global logger
         logger.log("INFO", "rmdir", path)
-        pass
+        if path not in self.meta:
+            logger.log("ERROR", "RMDIR", path+" does not exist")
+            return FuseOSError(ENOENT)
+        else:
+            for m in list(self.meta.keys()):
+                if os.path.dirname(m) == path and S_ISDIR(self.meta[m]['st_mode']):
+                    self.rmdir(m)
+            packet = Packet(path, "RMDIR", {}, {}, 0, slist, [])
+            tcpclient = TCPClient()
+            rpacket = tcpclient.sendallpacket(packet)
+            logger.log("INFO", "RMDIR", "removed "+str(rpacket.misc))
+            return 0
 
     def setxattr(self, path, name, value, options, position=0):
         # not implemented yet
@@ -635,6 +648,7 @@ class Amfora(LoggingMixIn, Operations):
     def unlink(self, path):
         #Unlink is not well funcitoning for the moment
         global logger
+        global localip
         global misc
         logger.log("INFO", "UNLINK", path)
         #unlink is a two step procedure, first, we need to find the metadata of this file then remove the meta
@@ -644,8 +658,9 @@ class Amfora(LoggingMixIn, Operations):
         if path in self.meta:
             dst = self.meta[path]['location']
             self.meta.pop(path)
-        else:
-            ip = misc.findserver(path)
+        
+        ip = misc.findserver(path)
+        if not ip == localip:
             packet = Packet(path, "UNLINK", {}, {}, 0, [ip], None)
             ret = tcpclient.sendpacket(packet)
             if not ret.meta:
@@ -657,9 +672,8 @@ class Amfora(LoggingMixIn, Operations):
             logger.log("ERROR", "UNLINK", "unlink "+path+" failed")
             raise FuseOSError(ENOENT)
         else:
-            hvalue = misc.hash(path)
-            if hvalue in self.data:
-                self.data.pop(hvalue)
+            if path in self.data:
+                self.data.pop(path)
             else:
                 packet = Packet(path, "REMOVE", {}, {}, 0, [dst], None)
                 ret = tcpclient.sendpacket(packet)
@@ -868,7 +882,29 @@ class Amfora(LoggingMixIn, Operations):
     def local_rmdir(self, path):
         global logger
         logger.log("INFO", "local_rmdir", path)
-
+        rlist = []
+        for m in list(self.meta.keys()):
+            if os.path.dirname(m) == path or m == path:
+                self.meta.pop(m)
+                if m not in rlist:
+                    rlist.append(m)
+        for m in list(self.cmeta.keys()):
+            if os.path.dirname(m) == path or m == path:
+                self.cmeta.pop(m)
+                if m not in rlist:
+                    rlist.append(m)
+        for m in list(self.data.keys()):
+            if os.path.dirname(m) == path:
+                self.data.pop(m)
+                if m not in rlist:
+                    rlist.append(m)
+        for m in list(self.cdata.keys()):
+            if os.path.dirname(m) == path:
+                self.cdata.pop(m)
+                if m not in rlist:
+                    rlist.append(m)
+        return rlist
+            
     def local_setxattr(self, path, name, value, options, position=0):
         # Ignore options
         attrs = self.files[path].setdefault('attrs', {})
@@ -1531,6 +1567,15 @@ class TCPworker(threading.Thread):
                 rpacket.tlist = [remoteip]    
                 tcpclient.one_sided_sendpacket(rpacket, 55001)    
                 conn.close()
+            elif packet.op == 'RMDIR':
+                path = packet.path
+                remoteip, remoteport = conn.getpeername()
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendallpacket(packet)
+                rpacket.tlist = [remoteip]    
+                tcpclient.one_sided_sendpacket(rpacket, 55001)    
+                conn.close()
+
             elif packet.op == 'MKDIR':
                 path = packet.path
                 mode = packet.misc
@@ -2110,6 +2155,11 @@ class CollectiveThread(threading.Thread):
         elif self.packet.op == "READDIR":
             ret = amfora.local_readdir(self.packet.path, self.packet.misc)
             self.packet.meta.update(ret)
+            self.packet.ret = self.packet.ret | 0
+            logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
+        elif self.packet.op == "RMDIR":
+            ret = amfora.local_rmdir(self.packet.path)
+            self.packet.misc.extend(ret)
             self.packet.ret = self.packet.ret | 0
             logger.log("INFO", "CollThread_run()", self.packet.op+" "+self.packet.path+" finished")
         elif self.packet.op == "MULTICAST":
