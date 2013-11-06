@@ -94,6 +94,7 @@ class TCPclient():
 
         except socket.error as msg:
             logger.log("ERROR", "TCPclient_sendmsg", "Socket Exception: "+str(msg))
+            ret = Packet("", "", None, None, 1, None, None)
         except Exception as msg:
             logger.log("ERROR", "TCPclient_sendmsg", "Otehr Exception: "+str(msg))
         finally:
