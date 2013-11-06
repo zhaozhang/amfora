@@ -655,12 +655,11 @@ class Amfora(LoggingMixIn, Operations):
         #second, clear the actual data 
         tcpclient = TCPClient()
         dst = None
-        if path in self.meta:
+        ip = misc.findserver(path)
+        if ip == localip:
             dst = self.meta[path]['location']
             self.meta.pop(path)
-        
-        ip = misc.findserver(path)
-        if not ip == localip:
+        else:
             packet = Packet(path, "UNLINK", {}, {}, 0, [ip], None)
             ret = tcpclient.sendpacket(packet)
             if not ret.meta:
@@ -668,17 +667,22 @@ class Amfora(LoggingMixIn, Operations):
                 raise FuseOSError(ENOENT)
             else:
                 dst = ret.meta[path]['location']
+        if path in self.meta:
+            self.meta.pop(path)
+
         if not dst:
             logger.log("ERROR", "UNLINK", "unlink "+path+" failed")
             raise FuseOSError(ENOENT)
         else:
-            if path in self.data:
+            if dst == localip:
                 self.data.pop(path)
             else:
                 packet = Packet(path, "REMOVE", {}, {}, 0, [dst], None)
                 ret = tcpclient.sendpacket(packet)
                 if ret.ret != 0:
                     logger.log("ERROR", "UNLINK", "remove "+path+" failed")
+            if path in self.data:
+                self.data.pop(path)
 
     def utimens(self, path, times=None):
         global logger
