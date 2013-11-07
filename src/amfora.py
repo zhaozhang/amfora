@@ -2005,10 +2005,11 @@ class Misc():
             row_tag = row_tag+1
             elist = row.split(b'\t')
             for i in range(len(elist)):
-                if row_tag < num_rows:
-                    ddict[str(i)].extend(elist[i]+b'\t')
-                else:
-                    ddict[str(i)].extend(elist[i]+b'\n')
+                ddict[str(i)].extend(elist[i]+b'\n')
+                #if row_tag < num_rows:
+                #    ddict[str(i)].extend(elist[i]+b'\t')
+                #else:
+                #    ddict[str(i)].extend(elist[i]+b'\n')
         return ddict        
 
     def to_row_table(self, data):
