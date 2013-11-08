@@ -3,6 +3,8 @@ AMFORA
 
 AMFORA is a POSIX-compatible parallel scripting framework that lets users run existing programs in parallel with data stored in RAM on distributed platforms: e.g. clouds, clusters, supercomputers. 
 
+AMFORA runs on: IBM Blue Gene/P with ZeptoOS, UChicago CS Cluster with Ubuntu 12.04, AMAZON EC2 with Ubuntu 12.04, Google Compute Engine with Debian-7-wheezy.
+
 AMFORA features:
 
 1. AMFORA lets the user select the scripting language they will use as the programming interface
