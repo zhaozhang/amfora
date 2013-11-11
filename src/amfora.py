@@ -1210,8 +1210,9 @@ class TCPClient():
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, taskl) 
             elif packet.op == "LOAD":
                 filel = []
-                num_files = math.ceil(len(ol)*total_files/len(packet.tlist))
-                print(str(num_files)+" "+str(len(ol))+" "+str(total_files)+" "+str(len(packet.tlist)))
+                #num_files = math.ceil(len(ol)*total_files/len(packet.tlist))
+                #print(str(num_files)+" "+str(len(ol))+" "+str(total_files)+" "+str(len(packet.tlist)))
+                num_files = math.ceil(len(packet.misc)/2)
                 for i in range(num_files):
                     filel.append(packet.misc.pop())
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, filel)
