@@ -34,9 +34,9 @@ class Logger():
         self.fd = open(logfile, "w")
 
     def log(self, info, function, message):
-        #self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
-        #self.fd.flush()
-        print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
+        self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
+        self.fd.flush()
+        #print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
 
 if not hasattr(__builtins__, 'bytes'):
     bytes = str
@@ -1041,7 +1041,7 @@ class TCPClient():
             except socket.error as msg:
                 logger.log("ERROR", "TCPclient_init_server", msg)
                 server = None
-                sleep(0.1)
+                sleep(1)
             else:
                 logger.log("INFO", "TCPclient_init_server", "server TCP socket started")
                 return server
@@ -1194,8 +1194,7 @@ class TCPClient():
                 ddict = {}
                 klist = list(sorted(packet.misc))
                 num_files = math.ceil(len(ol)*total_files/(len(packet.tlist)-1))
-                #num_files = math.ceil(len(klist)/2)
-                print(str(num_files)+" "+str(len(ol))+" "+str(total_files)+" "+str(len(packet.tlist)))
+                #print(str(num_files)+" "+str(len(ol))+" "+str(total_files)+" "+str(len(packet.tlist)))
                 
                 oklist = []
                 for i in range(num_files):
@@ -1375,6 +1374,7 @@ class ShuffleServer(threading.Thread):
         logger.log("INFO", "ShuffleServer_run()", "shuffle finished")        
         self.server.shutdown(socket.SHUT_RDWR)
         self.server.close()
+        self.server=None
 
 class ShuffleThread(threading.Thread):
     def __init__(self, packet):
