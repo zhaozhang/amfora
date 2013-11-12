@@ -34,9 +34,9 @@ class Logger():
         self.fd = open(logfile, "w")
 
     def log(self, info, function, message):
-        self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
-        self.fd.flush()
-        #print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
+        #self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
+        #self.fd.flush()
+        print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
 
 if not hasattr(__builtins__, 'bytes'):
     bytes = str
@@ -1193,14 +1193,18 @@ class TCPClient():
                 mdict = {}
                 ddict = {}
                 klist = list(sorted(packet.misc))
-                num_files = math.ceil(len(klist)/2)
+                num_files = math.ceil(len(ol)*total_files/(len(packet.tlist)-1))
+                #num_files = math.ceil(len(klist)/2)
+                print(str(num_files)+" "+str(len(ol))+" "+str(total_files)+" "+str(len(packet.tlist)))
+                
                 oklist = []
                 for i in range(num_files):
-                    k = klist.pop()
-                    packet.misc.remove(k)
-                    mdict[k] = meta.pop(k)
-                    ddict[k] = data.pop(k)
-                    oklist.append(k)
+                    if len(klist) > 0:
+                        k = klist.pop()
+                        packet.misc.remove(k)
+                        mdict[k] = meta.pop(k)
+                        ddict[k] = data.pop(k)
+                        oklist.append(k)
                 op = Packet(packet.path, packet.op, mdict, ddict, packet.ret, ol, sorted(oklist))    
             elif packet.op == "EXECUTE":
                 taskl = []
