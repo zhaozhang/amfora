@@ -34,9 +34,9 @@ class Logger():
         self.fd = open(logfile, "w")
 
     def log(self, info, function, message):
-        #self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
-        #self.fd.flush()
-        print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
+        self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
+        self.fd.flush()
+        #print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
 
 if not hasattr(__builtins__, 'bytes'):
     bytes = str
@@ -275,7 +275,7 @@ class Amfora(LoggingMixIn, Operations):
         tlist = os.listdir(src)
         flist = []
         for f in tlist:
-            print(os.path.join(src, f))
+            #print(os.path.join(src, f))
             if os.path.isdir(os.path.join(src, f)):
                 logger.log("INFO", "LOAD", "recursively load "+os.path.join(src, f)+" to "+os.path.join(mountpoint, basename))
                 self.load(os.path.join(src, f), os.path.join(mountpoint, basename))
@@ -1190,7 +1190,8 @@ class TCPClient():
 
         for ol in olist:
             if packet.op == "SCATTER":
-                num_files = math.ceil(len(ol)*total_files/len(packet.tlist))
+                #num_files = math.ceil(len(ol)*total_files/len(packet.tlist))
+                num_files = math.ceil(len(packet.misc)/2)
                 mdict = {}
                 ddict = {}
                 klist = list(sorted(packet.misc))
@@ -1204,15 +1205,16 @@ class TCPClient():
                 op = Packet(packet.path, packet.op, mdict, ddict, packet.ret, ol, sorted(oklist))    
             elif packet.op == "EXECUTE":
                 taskl = []
-                num_tasks = math.ceil(len(ol)*total_tasks/len(packet.tlist))
+                #num_tasks = math.ceil(len(ol)*total_tasks/len(packet.tlist))
+                num_tasks = math.ceil(len(packet.misc)/2)
                 for i in range(num_tasks):
                     taskl.append(packet.misc.pop())
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, taskl) 
             elif packet.op == "LOAD":
                 filel = []
                 #num_files = math.ceil(len(ol)*total_files/len(packet.tlist))
-                #print(str(num_files)+" "+str(len(ol))+" "+str(total_files)+" "+str(len(packet.tlist)))
                 num_files = math.ceil(len(packet.misc)/2)
+                #print(str(num_files)+" "+str(len(ol))+" "+str(total_files)+" "+str(len(packet.tlist)))
                 for i in range(num_files):
                     filel.append(packet.misc.pop())
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, filel)
