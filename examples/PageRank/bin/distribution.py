@@ -31,6 +31,7 @@ if __name__=="__main__":
         words = line.strip('\n').split(' ')
         pageid = words[0][:len(words[0])-1]
         for page in words[1:]:
-            print(page+'\t'+str(float(sdict[pageid])/(len(words)-1)))
+            print("%s\t%.8f" % (page, float(sdict[pageid])/(len(words)-1)))
+            #print(page+'\t'+str(float(sdict[pageid])/(len(words)-1)))
 
         
