@@ -1156,6 +1156,10 @@ class TCPClient():
     def sendallpacket(self, packet):
         global logger
         global misc
+        global sdict
+        global localip
+        global shuffleserver
+
         logger.log("INFO", "TCPclient_sendallpacket", packet.op+" "+packet.path+" "+str(packet.misc))
         #partition the target list in the packet to reorganize the nodes into an MST
         #The current implementation of partition_list() is MST
@@ -1227,9 +1231,9 @@ class TCPClient():
             logger.log("INFO", "TCPclient_sendallpacket()", "ready to start shuffle")
             global amfora
             global localip
-            global slist
-            global sdict
-            global shuffleserver
+            #global slist
+            #global sdict
+            #global shuffleserver
             retdict = defaultdict(bytes)
             for ip in slist:
                 retdict[ip] = b''
@@ -1241,22 +1245,24 @@ class TCPClient():
                 sdict = misc.shuffle(dict())
             logger.log("INFO", "TCPclient_sendallpacket()", "Shuffle_start sdict: "+str(sdict))
             retdict[localip] = sdict.pop(localip)
-
-            s_server = self.init_server('', 55003)
-            shuffleserver = ShuffleServer(s_server, retdict, packet)
-            shuffleserver.start()
+            
+            shuffleserver.reset(retdict, packet)
+            #s_server = self.init_server('', 55003)
+            #shuffleserver = ShuffleServer(s_server, retdict, packet)
+            #shuffleserver.start()
 
         elif packet.op =="SHUFFLE":
             logger.log("INFO", "TCP_sendallpacket()", "ready to shuffle")
-            global sdict
-            global localip
-            global shuffleserver
+            #global sdict
+            #global localip
+            #global shuffleserver
             nextip = misc.nextip()
             p = Packet(packet.path, "SHUFFLETHREAD", {}, sdict, 0, [nextip], [localip, packet.misc])
             #send a packet to next server
             self.one_sided_sendpacket(p, 55003)
             
-            while shuffleserver.is_alive():
+            #while shuffleserver.is_alive():
+            while shuffleserver.status == 0:
                 sleep(0.1)
                 pass
 
@@ -1292,14 +1298,37 @@ class TCPClient():
         return packet    
     
 class ShuffleServer(threading.Thread):
-    def __init__(self, server, retdict, packet):
+    def __init__(self, name, port):
         threading.Thread.__init__(self)
-        self.server = server
+        self.id = name
+        self.host = ''
+        self.port = port
+        self.server = None
+        self.bufsize = 1048576
+        self.psize = 16
+        self.retdict = None
+        self.packet = None
+        self.dst = None
+        self.status = 0 #0 means stall, 1 means running
+
+    def reset(self, retdict, packet):
         self.retdict = retdict
         self.packet = packet
         self.dst = packet.misc[1]
-        self.bufsize = 1048576
-        self.psize = 16
+        self.status = 1
+
+    def open_socket(self):
+        global logger
+        try:
+            logger.log("INFO", "ShuffleServer_opensocket", "Open server socket")
+            self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server.bind((self.host, self.port))
+            self.server.listen(5)
+        except socket.error as msg:
+            logger.log("ERROR", "ShuffleServer_opensocket", msg)
+            self.server = None
+
 
     def run(self):
         global logger
@@ -1307,6 +1336,7 @@ class ShuffleServer(threading.Thread):
         global amfora
         global slist
         logger.log("INFO", "ShuffleServer_run()", "thread started")
+        self.open_socket()
         counter = 0
         
         tcpclient = TCPClient()
@@ -1315,7 +1345,24 @@ class ShuffleServer(threading.Thread):
             #return if this server receives slist-1 packets
             if counter == len(slist)-1:
                 logger.log("INFO", "ShufflerServer_run()", "received "+str(counter)+" packets, now terminates")
-                break
+                counter = 0
+                index = slist.index(localip)
+                if self.dst == '/':
+                    fname = '/'+str(index)
+                else:
+                    fname = self.dst+'/'+str(index)
+                amfora.create(fname, 33188)    
+                temp = bytearray()
+                logger.log("INFO", "ShuffleServer_run()", "retdict: "+str(self.retdict))
+                for k in self.retdict:
+                    temp.extend(self.retdict[k])
+                    logger.log("INFO", "ShuffleServer_run()", "processing record from "+k)
+                amfora.cdata[fname] = bytes(temp)
+                amfora.cmeta[fname]['st_size'] = len(amfora.cdata[fname])
+                amfora.release(fname, 0)
+                logger.log("INFO", "ShuffleServer_run()", "shuffle finished")        
+                self.status = 0
+                #break
             else:
                 conn, addr = self.server.accept()
                 try:
@@ -1356,6 +1403,7 @@ class ShuffleServer(threading.Thread):
                     counter = counter + 1
         
         #now the shuffle server has all shuffled data 
+        '''
         logger.log("INFO", "ShuffleServer_run()", "now server has "+str(len(self.retdict.keys()))+" records")            
         index = slist.index(localip)
         if self.dst == '/':
@@ -1375,6 +1423,7 @@ class ShuffleServer(threading.Thread):
         self.server.shutdown(socket.SHUT_RDWR)
         self.server.close()
         self.server=None
+        '''
 
 class ShuffleThread(threading.Thread):
     def __init__(self, packet):
@@ -2296,12 +2345,6 @@ if __name__ == '__main__':
     global sdict
     sdict = dict()
 
-    global shuffleserver
-    shuffleserver = None
-
-    global shuffleself
-    shuffleself = 0
-    
     global slist
     slist = []
     fd = open(argv[2], 'r')
@@ -2319,6 +2362,11 @@ if __name__ == '__main__':
     global tcpqueue
     tcpqueue = queue.Queue()
 
+    global shuffleserver
+    shuffleserver = ShuffleServer('Shuffleserver', 55003)
+    while not shuffleserver.is_alive():
+        shuffleserver.start()
+
     tcpserver = TCPserver('TCPserver', 55000)
     while not tcpserver.is_alive():
         tcpserver.start()
@@ -2334,6 +2382,7 @@ if __name__ == '__main__':
     interfaceserver = Interfaceserver('Interfaceserver', 55002)
     while not interfaceserver.is_alive():
         interfaceserver.start()
+
 
     fuse = FUSE(amfora, mountpoint, foreground=True, big_writes=True, direct_io=True)
 
