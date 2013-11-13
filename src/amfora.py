@@ -34,9 +34,9 @@ class Logger():
         self.fd = open(logfile, "w")
 
     def log(self, info, function, message):
-        self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
-        self.fd.flush()
-        #print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
+        #self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
+        #self.fd.flush()
+        print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
 
 if not hasattr(__builtins__, 'bytes'):
     bytes = str
@@ -1159,6 +1159,7 @@ class TCPClient():
         global sdict
         global localip
         global shuffleserver
+        global shufflethread
 
         logger.log("INFO", "TCPclient_sendallpacket", packet.op+" "+packet.path+" "+str(packet.misc))
         #partition the target list in the packet to reorganize the nodes into an MST
@@ -1243,10 +1244,13 @@ class TCPClient():
                 sdict = misc.shuffle(packet.misc[0][localip])
             else:
                 sdict = misc.shuffle(dict())
-            logger.log("INFO", "TCPclient_sendallpacket()", "Shuffle_start sdict: "+str(sdict))
+            #logger.log("INFO", "TCPclient_sendallpacket()", "Shuffle_start sdict: "+str(sdict))
             retdict[localip] = sdict.pop(localip)
             
             shuffleserver.reset(retdict, packet)
+            while not shufflethread.is_alive():
+                shufflethread.start()    
+
             #s_server = self.init_server('', 55003)
             #shuffleserver = ShuffleServer(s_server, retdict, packet)
             #shuffleserver.start()
@@ -1259,12 +1263,11 @@ class TCPClient():
             nextip = misc.nextip()
             p = Packet(packet.path, "SHUFFLETHREAD", {}, sdict, 0, [nextip], [localip, packet.misc])
             #send a packet to next server
-            self.one_sided_sendpacket(p, 55003)
-            
+            #self.one_sided_sendpacket(p, 55003)
+            shufflethread.push(p)
             #while shuffleserver.is_alive():
-            while shuffleserver.status == 0:
+            while shuffleserver.status == 1:
                 sleep(0.1)
-                pass
 
         elif packet.op == "EXECUTE":
             logger.log("INFO", "TCPclient_sendallpacket()", "ready to execute: "+str(len(packet.misc))+" tasks")
@@ -1335,12 +1338,14 @@ class ShuffleServer(threading.Thread):
         global localip
         global amfora
         global slist
+        global shufflethread
         logger.log("INFO", "ShuffleServer_run()", "thread started")
         self.open_socket()
         counter = 0
         
         tcpclient = TCPClient()
         nextip = misc.nextip()
+        conn, addr = self.server.accept()
         while True:
             #return if this server receives slist-1 packets
             if counter == len(slist)-1:
@@ -1353,7 +1358,7 @@ class ShuffleServer(threading.Thread):
                     fname = self.dst+'/'+str(index)
                 amfora.create(fname, 33188)    
                 temp = bytearray()
-                logger.log("INFO", "ShuffleServer_run()", "retdict: "+str(self.retdict))
+                #logger.log("INFO", "ShuffleServer_run()", "retdict: "+str(self.retdict))
                 for k in self.retdict:
                     temp.extend(self.retdict[k])
                     logger.log("INFO", "ShuffleServer_run()", "processing record from "+k)
@@ -1364,7 +1369,6 @@ class ShuffleServer(threading.Thread):
                 self.status = 0
                 #break
             else:
-                conn, addr = self.server.accept()
                 try:
                     peer = conn.getpeername()[0]
                     data = conn.recv(self.psize)
@@ -1387,11 +1391,12 @@ class ShuffleServer(threading.Thread):
                     tp = pickle.loads(data)
                     self.retdict[tp.misc[0]]=tp.data.pop(localip)
                     
-                    logger.log("INFO", "ShufflerServer_run()", "remained dict: "+str(tp.data))
+                    #logger.log("INFO", "ShufflerServer_run()", "remained dict: "+str(tp.data))
                     if len(tp.data.keys()) > 0:
                         packet = Packet(tp.path, tp.op, tp.meta, tp.data, tp.ret, [nextip], tp.misc)
-                        shufflethread = ShuffleThread(packet)
-                        shufflethread.start()
+                        shufflethread.push(packet)
+                        #shufflethread = ShuffleThread(packet)
+                        #shufflethread.start()
                         #tcpclient = TCPClient()
                         #tcpclient.one_sided_sendpacket(packet, 55003)
 
@@ -1400,8 +1405,9 @@ class ShuffleServer(threading.Thread):
                 except Exception as msg:
                     logger.log("ERROR", "ShuffleServer_run()", "Other Exception: "+str(msg))
                 finally:
+                    #conn.close()
                     counter = counter + 1
-        
+                    logger.log("INFO", "ShuffleServer_run()", "received "+str(counter)+" packets")
         #now the shuffle server has all shuffled data 
         '''
         logger.log("INFO", "ShuffleServer_run()", "now server has "+str(len(self.retdict.keys()))+" records")            
@@ -1426,15 +1432,83 @@ class ShuffleServer(threading.Thread):
         '''
 
 class ShuffleThread(threading.Thread):
-    def __init__(self, packet):
+    def __init__(self):
+        global misc
         threading.Thread.__init__(self)
-        self.packet = packet
+        self.queue = queue.Queue()
+        self.nextip = misc.nextip()
+        self.sock = None
+        self.psize = 16
+        self.bufsize = 1048576
+
+    def init_port(self, ip, port):
+        global logger
+        logger.log("INFO", "ShuffleThread_init_port", "connecting to "+ip+":"+str(port))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        connected = 0
+        while connected == 0:
+            try:
+                sock.connect((ip, port))
+            except socket.error:
+                logger.log("ERROR", "ShuffleThread_init_port", "connect "+ip+" failed, try again")
+                sleep(1)
+                continue
+            else:
+                connected = 1
+                logger.log("INFO", "ShuffleThread_init_port", "connected to "+ip+":"+str(port))
+        return sock
+
+    def one_sided_sendpacket(self, packet):
+        global logger
+        global localip
+        global amfora
+        logger.log("INFO", "ShuffleThread_one_sided_sendpacket()", packet.path+" "+packet.op)
+
+        try:
+            #dump packet into binary format
+            bpacket = pickle.dumps(packet)
+            
+            #get the packet size
+            length = len(bpacket)
+            logger.log("INFO", "ShuffleThread.one_sided_sendpacket()", "ready to send "+str(length)+" bytes")
+
+            #paddling the length of the packet to a 16 bytes number
+            slength = str(length)
+            while len(slength) < self.psize:
+                slength = slength + '\0'
+
+            #send the length, and wait for an ack    
+            self.sock.send(bytes(slength, 'utf-8'))
+            self.sock.recv(1)
+            
+            #send the bpacket data
+            sent = 0
+            while sent < length:
+                if length - sent > self.bufsize:
+                    sent_iter = self.sock.send(bpacket[sent:sent+self.bufsize])
+                else:
+                    sent_iter = self.sock.send(bpacket[sent:])
+                sent = sent + sent_iter
+                logger.log("INFO", "ShuffleThread.one_sided_sendpacket()", "send "+str(sent_iter)+" bytes")
+            logger.log("INFO", "ShuffleThread.one_sided_sendpacket()", "totally send "+str(sent)+" bytes")    
+        except socket.error as msg:
+            logger.log("ERROR", "ShuffleThread.one_sided_sendpacket()", "Socket Exception: "+str(msg))
+        except Exception as msg:
+            logger.log("ERROR", "ShuffleThread.one_sided_sendpacket()", "Other Exception: "+str(msg))
+
+    def push(self, packet):
+        self.queue.put(packet, True, None)
 
     def run(self):    
         global logger
-        logger.log("INFO", "ShuffleThread", "Sending pakcet to "+str(self.packet.tlist))
-        tcpclient = TCPClient()
-        tcpclient.one_sided_sendpacket(self.packet, 55003)
+        self.sock = self.init_port(self.nextip, 55003)
+        while True:
+            packet = self.queue.get(True, None)
+            logger.log("INFO", "ShuffleThread", "Sending pakcet to "+self.nextip)
+            self.one_sided_sendpacket(packet)
+            packet.data.clear()
+            packet = None
+ 
 
 class TCPserver(threading.Thread):
     def __init__(self, workerid, port):
@@ -2027,7 +2101,7 @@ class Misc():
                     #k = m.group('key')
                     #v = m.group('value')
                     k, v = line.split()
-                    logger.log("INFO", "MISC_shuffle()", "key: "+k.decode('utf8')+" values: "+v.decode('utf8'))
+                    #logger.log("INFO", "MISC_shuffle()", "key: "+k.decode('utf8')+" values: "+v.decode('utf8'))
                     value = zlib.adler32(k) & 0xffffffff
                     ip = slist[value%len(slist)]
                     hdict[ip].extend(line+b'\n')
@@ -2366,6 +2440,9 @@ if __name__ == '__main__':
     shuffleserver = ShuffleServer('Shuffleserver', 55003)
     while not shuffleserver.is_alive():
         shuffleserver.start()
+        
+    global shufflethread
+    shufflethread = ShuffleThread()
 
     tcpserver = TCPserver('TCPserver', 55000)
     while not tcpserver.is_alive():
