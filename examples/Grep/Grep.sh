@@ -1,6 +1,6 @@
 #!/bin/bash
 cp -r examples/Grep/data /tmp/amfora
-amc.py scatter /tmp/amfora/data
+src/amc.py scatter /tmp/amfora/data
 
 mkdir /tmp/amfora/temp
 for file in `ls /tmp/amfora/data`
