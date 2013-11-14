@@ -27,7 +27,7 @@ Project Hosting Page: https://github.com/zhaozhang/amphora
 
 Project Documentation Page: https://github.com/zhaozhang/amfora/wiki
 
-Project Mailing List: coming soon
+Project Mailing List: https://groups.google.com/forum/#!forum/amfora-user
 
 #Building
 The Amphora framework requires the following sotware and package:
