@@ -1349,7 +1349,7 @@ class ShuffleServer(threading.Thread):
 
         while True:
             #return if this server receives slist-1 packets
-            if counter == len(slist)-1:
+            if counter == len(slist)-1 and len(slist) > 1:
                 logger.log("INFO", "ShufflerServer_run()", "received "+str(counter)+" packets, now terminates")
                 counter = 0
                 index = slist.index(localip)
