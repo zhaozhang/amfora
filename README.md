@@ -41,9 +41,9 @@ fusepy module which provides the python bindings (https://github.com/terencehonl
 #Installation
 If you want to run AMFORA on a regular cluster with fuse interface, please refer to [Quick Start](https://github.com/zhaozhang/amfora/wiki/Amfora-Quickstart)
 
-If you want to run AMFORA on Amazon EC2, please refer to our [Amazon EC2 Recipe](https://github.com/zhaozhang/amfora/wiki/AMAZON-EC2-Recipe)
+If you want to run AMFORA on Amazon EC2, please refer to our [Amazon EC2 Recipe](https://github.com/zhaozhang/amfora/wiki/Amfora-Amazon-EC2-Recipe)
 
-If you want to run AMFORA on Google Compute Engine, please refer to our [Google Compute Engine Recipe](https://github.com/zhaozhang/amfora/wiki/Google-Compute-Engine-Recipe)
+If you want to run AMFORA on Google Compute Engine, please refer to our [Google Compute Engine Recipe](https://github.com/zhaozhang/amfora/wiki/Amfora-Google-Compute-Engine-Recipe)
 
 If you want to run AMFORA on a Raspberry Pi cluster, please follow the [Quick Start](https://github.com/zhaozhang/amfora/wiki/Amfora-Quickstart) 
 
