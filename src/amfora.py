@@ -1167,7 +1167,7 @@ class TCPClient():
         #SEQ algorithm can be implemented by modifying the code in partition_list()
         olist = misc.partition_list(packet.tlist)
         #start an asynchronous server to receive acknowledgements of collective operations
-        logger.log("INFO", "TCPClient_sendallpacket", "num_targets: "+str(len(olist)))
+        logger.log("INFO", "TCPClient_sendallpacket", "num_targets: "+str(olist))
         if len(olist) > 0:
             server = self.init_server('', 55001)
         else:
@@ -1186,12 +1186,15 @@ class TCPClient():
         data = dict(packet.data)
         total_tasks = 0
         total_files = 0
+        total_target = 0
         if packet.op == "EXECUTE":
             total_tasks = len(packet.misc)
+            total_target = len(packet.tlist)
         elif packet.op == "SCATTER":
             total_files = len(meta)
         elif packet.op == "LOAD":
             total_files = len(packet.misc)
+            total_target = len(packet.tlist)
 
         for ol in olist:
             if packet.op == "SCATTER":
@@ -1212,13 +1215,19 @@ class TCPClient():
                 op = Packet(packet.path, packet.op, mdict, ddict, packet.ret, ol, sorted(oklist))    
             elif packet.op == "EXECUTE":
                 taskl = []
-                num_tasks = math.ceil(len(packet.misc)/2)
+                #num_tasks = math.ceil(len(packet.misc)/2)
+                num_tasks = math.ceil(len(ol)*total_tasks/total_target)
+                total_tasks = total_tasks - num_tasks
+                total_target = total_target - len(ol) 
                 for i in range(num_tasks):
                     taskl.append(packet.misc.pop())
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, taskl) 
             elif packet.op == "LOAD":
                 filel = []
-                num_files = math.ceil(len(packet.misc)/2)
+                #num_files = math.ceil(len(packet.misc)/2)
+                num_files = math.ceil(len(ol)*total_files/total_target)
+                total_files = total_files-num_files
+                total_target = total_target - len(ol)
                 #print(str(num_files)+" "+str(len(ol))+" "+str(total_files)+" "+str(len(packet.tlist)))
                 for i in range(num_files):
                     filel.append(packet.misc.pop())
@@ -2055,7 +2064,7 @@ class Misc():
         vlist.remove(localip)
         while len(vlist) > 0:
             temp = []
-            for i in range(int(len(vlist)/2)+1):
+            for i in range(math.ceil(len(vlist)/2)):
                 ip = vlist.pop()
                 temp.append(ip)
             tlist.append(temp)    
