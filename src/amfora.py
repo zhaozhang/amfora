@@ -34,9 +34,9 @@ class Logger():
         self.fd = open(logfile, "w")
 
     def log(self, info, function, message):
-        self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
-        self.fd.flush()
-        #print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
+        #self.fd.write("%s: %s %s %s\n" % (str(datetime.datetime.now()), info, function, message))
+        #self.fd.flush()
+        print("%s: %s %s %s" % (str(datetime.datetime.now()), info, function, message))
 
 if not hasattr(__builtins__, 'bytes'):
     bytes = str
@@ -401,7 +401,8 @@ class Amfora(LoggingMixIn, Operations):
         self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
                                      st_size=0, st_ctime=time(), st_mtime=time(), 
                                      st_atime=time(), location=localip, key=misc.hash(path))
-        self.cdata[path]=b'' 
+        #self.cdata[path]=b'' 
+        self.cdata[path]=bytearray()
         self.fd += 1
         return self.fd
 
@@ -517,7 +518,7 @@ class Amfora(LoggingMixIn, Operations):
                 return None
             else:
                 self.data[path] = rpacket.data[path]
-                return self.data[path][offset:offset + size]
+                return bytes(self.data[path][offset:offset + size])
 
     def readdir(self, path, fh):
         global logger
@@ -695,10 +696,15 @@ class Amfora(LoggingMixIn, Operations):
         logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
         #write to the right place
         if path in self.cdata:
-            self.cdata[path] = self.cdata[path][:offset]+data
-            #self.data[path] = self.data[path][:offset]+data
+            if offset == len(self.cdata[path]):
+                self.cdata[path].extend(data)
+            else:    
+                self.cdata[path] = self.cdata[path][:offset]+data
         if path in self.data:
-            self.data[path] = self.data[path][:offset]+data
+            if offset == len(self.data[path]):
+                self.data[path].extend(data)
+            else:    
+                self.data[path] = self.data[path][:offset]+data
         if path not in self.cdata:
             print("write sent to remote server")
             #ip = misc.findserver(path)
@@ -710,7 +716,10 @@ class Amfora(LoggingMixIn, Operations):
             
         #update the metadata
         if path in self.cmeta:
-            self.cmeta[path]['st_size'] = self.cmeta[path]['st_size']+len(data)
+            self.cmeta[path]['st_size'] = len(self.cdata[path])
+            #self.cmeta[path]['st_size'] = self.cmeta[path]['st_size']+len(data)
+            if path in self.meta:
+                self.meta[path] = self.cmeta[path]
         else:
             print("write+update+meta sent to remote server")
             #ip = misc.findserver(path)
