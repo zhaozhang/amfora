@@ -2421,8 +2421,8 @@ class Executor():
 
 
 if __name__ == '__main__':
-    if len(argv) != 4:
-        print(('usage: %s <mountpoint> <amfs.conf> <localip>' % argv[0]))
+    if len(argv) != 6:
+        print(('usage: %s <mountpoint> <amfs.conf> <localip> <replication_factor> <MTTF>' % argv[0]))
         exit(1)
         
     global logger
@@ -2431,7 +2431,11 @@ if __name__ == '__main__':
     mountpoint = argv[1]
     global localip
     localip = argv[3]
-
+    global replication_factor 
+    replication_factor = int(argv[4])
+    global MTTF
+    MTTF = int(argv[5])
+    logger.log("INFO", "main", "resilient feature: replication_factor: "+str(replication_factor)+"  MTTF: "+str(MTTF))
     global parentip
     parentip = ''
 
