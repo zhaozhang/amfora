@@ -382,14 +382,14 @@ class Amfora(LoggingMixIn, Operations):
             logger.log("INFO", "CHMOD", "chmod sent to remote server "+path+" "+str(mode))
             #send a chmod message to remote server
             tcpclient = TCPClient()
-            #flag, need to check exception here
+            #chmod, needs to update to all metadata replicas
             ips = misc.findserver(path)
-            ip = ips[0]
-            tcpclient = TCPClient(ip)
-            packet = Packet(path, "CHMOD", {}, {}, 0, [ip], mode)
-            ret=tcpclient.sendpacket(packet)
-            if ret != 0:
-                logger.log("ERROR", "chmod", path+" with "+str(mode)+" failed on "+ip)
+            for ip in ips:
+                tcpclient = TCPClient(ip)
+                packet = Packet(path, "CHMOD", {}, {}, 0, [ip], mode)
+                ret=tcpclient.sendpacket(packet)
+                if ret != 0:
+                    logger.log("ERROR", "chmod", path+" with "+str(mode)+" failed on "+ip)
             
     def chown(self, path, uid, gid):
         global logger
@@ -429,15 +429,20 @@ class Amfora(LoggingMixIn, Operations):
         elif len(path) > 7 and path[:7] == "/.Trash":
             raise OSError(ENOENT, '')
         else:
-            logger.log("INFO", "GETATTR", "getattr sent to remote server: "+path)
-            tcpclient = TCPClient()
-            packet = Packet(path, "GETATTR", None, None, None, [ip], None)
-            ret = tcpclient.sendpacket(packet)
-            if not ret.meta:
-                raise OSError(ENOENT, '')
-            else:
-                self.meta[path]=ret.meta[path]
-                return self.meta[path]
+            for ip in ips:
+                if ip != localip:
+                    logger.log("INFO", "GETATTR", "getattr sent to remote server: "+path)
+                    tcpclient = TCPClient()
+                    packet = Packet(path, "GETATTR", None, None, None, [ip], None)
+                    ret = tcpclient.sendpacket(packet)
+                    #return code 256 indicates there is an exception in sendpacket()
+                    if ret.ret == 256:
+                        continue
+                    if not ret.meta:
+                        raise OSError(ENOENT, '')
+                    else:
+                        self.meta[path]=ret.meta[path]
+                        return self.meta[path]
 
     def getxattr(self, path, name, position=0):
         global logger
@@ -452,14 +457,16 @@ class Amfora(LoggingMixIn, Operations):
                 global misc
                 #flag, check exception here
                 ips = misc.findserver(path)
-                ip = ips[0]
-                packet = Packet(path, "GETATTR", None, None, None, [ip], None)
-                tcpclient = TCPClient()
-                ret = tcpclient.sendpacket(packet)
-                if not ret.meta:
-                    return b''
-                else:
-                    return ret.meta[name]
+                for ip in ips:
+                    packet = Packet(path, "GETATTR", None, None, None, [ip], None)
+                    tcpclient = TCPClient()
+                    ret = tcpclient.sendpacket(packet)
+                    if ret.ret == 256:
+                        continue
+                    if not ret.meta:
+                        return b''
+                    else:
+                        return ret.meta[name]
         except KeyError:
             return b''
 
@@ -474,14 +481,16 @@ class Amfora(LoggingMixIn, Operations):
             global misc
             #flag, check exception here
             ips = misc.findserver(path)
-            ip = ips[0]
-            packet = Packet(path, "GETATTR", None, None, None, [ip], None)
-            tcpclient = TCPClient()
-            ret = tcpclient.sendpacket(packet)
-            if not ret.meta:
-                raise OSError(ENOENT, '')
-            else:
-                return ret.meta[path].keys()
+            for ip in ips:
+                packet = Packet(path, "GETATTR", None, None, None, [ip], None)
+                tcpclient = TCPClient()
+                ret = tcpclient.sendpacket(packet)
+                if ret.ret == 256:
+                    continue
+                if not ret.meta:
+                    raise OSError(ENOENT, '')
+                else:
+                    return ret.meta[path].keys()
 
     def mkdir(self, path, mode):
         global logger
@@ -597,13 +606,13 @@ class Amfora(LoggingMixIn, Operations):
         if old in self.meta:
             self.meta.pop(old)
 
-        #flag, check exception here, in this rm oepration, all replicas of metadata should be removed, will implement later    
+        #in this rename oepration, all replicas of metadata should be removed
         ips = misc.findserver(old)
-        ip = ips[0]
-        if ip != localip:
-            tcpclient = TCPClient()
-            packet = Packet(old, "RMMETA", None, None, None, [ip], None)
-            ret = tcpclient.sendpacket(packet)
+        for ip in ips:
+            if ip != localip:
+                tcpclient = TCPClient()
+                packet = Packet(old, "RMMETA", None, None, None, [ip], None)
+                ret = tcpclient.sendpacket(packet)
     
         self.release(new, 0)
     
@@ -669,18 +678,18 @@ class Amfora(LoggingMixIn, Operations):
         dst = None
         #flag, check exception here
         ips = misc.findserver(path)
-        ip = ips[0]
-        if ip == localip:
-            dst = self.meta[path]['location']
-            self.meta.pop(path)
-        else:
-            packet = Packet(path, "UNLINK", {}, {}, 0, [ip], None)
-            ret = tcpclient.sendpacket(packet)
-            if not ret.meta:
-                logger.log("ERROR", "UNLINK", "unlink "+path+" failed")
-                raise FuseOSError(ENOENT)
+        for ip in ips:
+            if ip == localip:
+                dst = self.meta[path]['location']
+                self.meta.pop(path)
             else:
-                dst = ret.meta[path]['location']
+                packet = Packet(path, "UNLINK", {}, {}, 0, [ip], None)
+                ret = tcpclient.sendpacket(packet)
+                if not ret.meta:
+                    logger.log("ERROR", "UNLINK", "unlink "+path+" failed")
+                    raise FuseOSError(ENOENT)
+                else:
+                    dst = ret.meta[path]['location']
         if path in self.meta:
             self.meta.pop(path)
 
@@ -688,10 +697,12 @@ class Amfora(LoggingMixIn, Operations):
             logger.log("ERROR", "UNLINK", "unlink "+path+" failed")
             raise FuseOSError(ENOENT)
         else:
-            if dst == localip:
+            #need to update file location with a list
+            ip=dst
+            if ip == localip:
                 self.data.pop(path)
             else:
-                packet = Packet(path, "REMOVE", {}, {}, 0, [dst], None)
+                packet = Packet(path, "REMOVE", {}, {}, 0, [ip], None)
                 ret = tcpclient.sendpacket(packet)
                 if ret.ret != 0:
                     logger.log("ERROR", "UNLINK", "remove "+path+" failed")
@@ -746,7 +757,7 @@ class Amfora(LoggingMixIn, Operations):
         global misc
         global localip
         logger.log("INFO", "RELEASE", path)
-        #flag, check exception here, this release function should update metadta to all replications, will implement later
+        #this release function should update metadta to all replications
         ips = misc.findserver(path)
 
         if path in self.cmeta:
@@ -1124,10 +1135,10 @@ class TCPClient():
                 logger.log("INFO", "TCPclient.sendpacket()", "totally receive "+str(len(data))+" bytes")    
                 s.close()
                 packet = pickle.loads(data)
-            except socket.error as msg:
-                logger.log("ERROR", "TCPclient_sendpacket()", "Socket Exception: "+str(msg))
             except Exception as msg:
-                logger.log("ERROR", "TCPclient_sendpacket()", "Other Exception: "+str(msg))
+                logger.log("ERROR", "TCPclient_sendpacket()", "Exception: "+str(msg))
+                packet = Packet("", "", None, None, 256, None, None)
+                return packet
             finally:
                 return packet
 
