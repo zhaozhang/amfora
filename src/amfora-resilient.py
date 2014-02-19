@@ -382,7 +382,9 @@ class Amfora(LoggingMixIn, Operations):
             logger.log("INFO", "CHMOD", "chmod sent to remote server "+path+" "+str(mode))
             #send a chmod message to remote server
             tcpclient = TCPClient()
-            ip = misc.findserver(path)
+            #flag, need to check exception here
+            ips = misc.findserver(path)
+            ip = ips[0]
             tcpclient = TCPClient(ip)
             packet = Packet(path, "CHMOD", {}, {}, 0, [ip], mode)
             ret=tcpclient.sendpacket(packet)
@@ -411,7 +413,9 @@ class Amfora(LoggingMixIn, Operations):
         global misc
         global localip
         logger.log("INFO", "getattr", path)
-        ip = misc.findserver(path)
+        #flag, check exception here
+        ips = misc.findserver(path)
+        ip = ips[0]
         logger.log("INFO", "getattr", "metadata of "+path+" is at "+ip)
         if path in self.meta:
             logger.log("INFO", "getattr", "metadata of "+path+" is self.meta ")
@@ -426,7 +430,6 @@ class Amfora(LoggingMixIn, Operations):
             raise OSError(ENOENT, '')
         else:
             logger.log("INFO", "GETATTR", "getattr sent to remote server: "+path)
-            ip = misc.findserver(path)
             tcpclient = TCPClient()
             packet = Packet(path, "GETATTR", None, None, None, [ip], None)
             ret = tcpclient.sendpacket(packet)
@@ -447,7 +450,9 @@ class Amfora(LoggingMixIn, Operations):
                 return self.meta[path][name]
             else:
                 global misc
-                ip = misc.findserver(path)
+                #flag, check exception here
+                ips = misc.findserver(path)
+                ip = ips[0]
                 packet = Packet(path, "GETATTR", None, None, None, [ip], None)
                 tcpclient = TCPClient()
                 ret = tcpclient.sendpacket(packet)
@@ -467,7 +472,9 @@ class Amfora(LoggingMixIn, Operations):
             return self.meta[path].keys()
         else:
             global misc
-            ip = misc.findserver(path)
+            #flag, check exception here
+            ips = misc.findserver(path)
+            ip = ips[0]
             packet = Packet(path, "GETATTR", None, None, None, [ip], None)
             tcpclient = TCPClient()
             ret = tcpclient.sendpacket(packet)
@@ -590,7 +597,9 @@ class Amfora(LoggingMixIn, Operations):
         if old in self.meta:
             self.meta.pop(old)
 
-        ip = misc.findserver(old)
+        #flag, check exception here, in this rm oepration, all replicas of metadata should be removed, will implement later    
+        ips = misc.findserver(old)
+        ip = ips[0]
         if ip != localip:
             tcpclient = TCPClient()
             packet = Packet(old, "RMMETA", None, None, None, [ip], None)
@@ -658,7 +667,9 @@ class Amfora(LoggingMixIn, Operations):
         #second, clear the actual data 
         tcpclient = TCPClient()
         dst = None
-        ip = misc.findserver(path)
+        #flag, check exception here
+        ips = misc.findserver(path)
+        ip = ips[0]
         if ip == localip:
             dst = self.meta[path]['location']
             self.meta.pop(path)
@@ -735,28 +746,28 @@ class Amfora(LoggingMixIn, Operations):
         global misc
         global localip
         logger.log("INFO", "RELEASE", path)
-        ip = misc.findserver(path)
+        #flag, check exception here, this release function should update metadta to all replications, will implement later
+        ips = misc.findserver(path)
 
         if path in self.cmeta:
             self.data[path] = self.cdata[path]
-            if ip == localip:
-                self.meta[path] = self.cmeta[path]
-                return 0
-            elif path in self.meta:
-                self.local_release(path, fh)
-                return 0
-            else:
-                logger.log("INFO", "RELEASE", "release sent to remote server: "+path+" "+ip)
-                tempdict = dict()
-                tempdict[path] = self.cmeta[path]
-                packet = Packet(path, "RELEASE", tempdict, None, None, [ip], None)
-                tcpclient = TCPClient()
-                rpacket = tcpclient.sendpacket(packet)
-                if rpacket.ret != 0:
-                    logger.log("ERROR", "RELEASE", path+" failed")
-                return rpacket.ret    
-        #elif path in self.data:
-        #     self.data.pop(path)
+            ret = 0
+            for ip in ips:
+                if ip == localip:
+                    self.meta[path] = self.cmeta[path]
+                elif path in self.meta:
+                    pass
+                else:
+                    logger.log("INFO", "RELEASE", "release sent to remote server: "+path+" "+ip)
+                    tempdict = dict()
+                    tempdict[path] = self.cmeta[path]
+                    packet = Packet(path, "RELEASE", tempdict, None, None, [ip], None)
+                    tcpclient = TCPClient()
+                    rpacket = tcpclient.sendpacket(packet)
+                    if rpacket.ret != 0:
+                        logger.log("ERROR", "RELEASE", path+" failed")
+                    ret = ret + rpacket.ret  
+            return ret        
         else:
             return 0
 
@@ -2062,8 +2073,14 @@ class Misc():
 
     def findserver(self, fname):
         global slist
+        global replication_factor
+        rlist = []
         value = zlib.adler32(bytes(fname, 'utf8')) & 0xffffffff
-        return slist[value%(len(slist))]
+        for i in range(replication_factor-1):
+            if i < len(slist):
+                rlist.append(slist[(value%(len(slist))+i)%len(slist)])
+        print("metadata of "+fname+" are stored on: "+str(rlist))        
+        return rlist
 
     def hash(self, fname):
         return zlib.adler32(bytes(fname, 'utf8')) & 0xffffffff
