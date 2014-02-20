@@ -83,7 +83,7 @@ class Amfora(LoggingMixIn, Operations):
             self.meta[apath] = self.getattr(apath, None)
         #if the file data is not local, copy it to local storage first
         if apath not in self.data:
-            ip = self.meta[apath]['location']
+            ip = self.meta[apath]['location'][0]
             logger.log("INFO", "READ", "read sent to remote server "+apath+" "+ip)
             packet = Packet(apath, "READ", {}, {}, 0, [ip], [0,0])
             
@@ -148,9 +148,9 @@ class Amfora(LoggingMixIn, Operations):
         nmeta = dict(rpacket.meta)
         gdict = dict()
         for m in rpacket.meta:
-            if rpacket.meta[m]['location'] not in gdict:
-                gdict[rpacket.meta[m]['location']] = []
-            gdict[rpacket.meta[m]['location']].append(m)
+            if rpacket.meta[m]['location'][0] not in gdict:
+                gdict[rpacket.meta[m]['location'][0]] = []
+            gdict[rpacket.meta[m]['location'][0]].append(m)
         self.meta.update(rpacket.meta)    
         packet = Packet(apath, "GATHER", {}, {}, 0, slist, gdict)    
         rpacket = tcpclient.sendallpacket(packet)
@@ -224,9 +224,9 @@ class Amfora(LoggingMixIn, Operations):
         #assemble the ip:hvalue hashmap
         ndict = dict()
         for m in nmeta:
-            if nmeta[m]['location'] not in ndict:
-                ndict[nmeta[m]['location']] = []
-            ndict[nmeta[m]['location']].append(m)
+            if nmeta[m]['location'][0] not in ndict:
+                ndict[nmeta[m]['location'][0]] = []
+            ndict[nmeta[m]['location'][0]].append(m)
 
         #start shuffle server
         logger.log("INFO", "SHUFFLE_START", str(slist))    
@@ -335,9 +335,9 @@ class Amfora(LoggingMixIn, Operations):
         meta = dict(rpacket.meta)
         fdict = dict() #key-ip, value-list of hvalue
         for k in meta:
-            if meta[k]['location'] not in fdict:
-                fdict[meta[k]['location']] = []
-            fdict[meta[k]['location']].append([meta[k]['key'], os.path.join(dirname, k[len(apath)+1:])])   
+            if meta[k]['location'][0] not in fdict:
+                fdict[meta[k]['location'][0]] = []
+            fdict[meta[k]['location'][0]].append([meta[k]['key'], os.path.join(dirname, k[len(apath)+1:])])   
         
         logger.log("INFO", "DUMP", "dumping the following files "+str(fdict)+" from "+src+" to "+dirname)
         packet=Packet(src, "DUMP", {}, {}, 0, slist, fdict)
@@ -402,7 +402,7 @@ class Amfora(LoggingMixIn, Operations):
         logger.log("INFO", "CREATE", path+", "+str(mode))
         self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
                                      st_size=0, st_ctime=time(), st_mtime=time(), 
-                                     st_atime=time(), location=localip, key=misc.hash(path))
+                                     st_atime=time(), location=[localip], key=misc.hash(path))
         #self.cdata[path]=b'' 
         self.cdata[path]=bytearray()
         self.fd += 1
@@ -526,7 +526,7 @@ class Amfora(LoggingMixIn, Operations):
         elif path in self.cdata:
             return bytes(self.cdata[path][offset:offset+size])
         else:
-            ip = self.meta[path]['location']
+            ip = self.meta[path]['location'][0]
             logger.log("INFO", "READ", "read sent to remote server "+path+" "+ip)
             packet = Packet(path, "READ", {}, {}, 0, [ip], [size, offset])
             tcpclient = TCPClient()
@@ -589,7 +589,7 @@ class Amfora(LoggingMixIn, Operations):
             self.cdata[new] = self.cdata[old]
             self.cdata.pop(old)
         else:
-            ip = self.cmeta[new]['location']
+            ip = self.cmeta[new]['location'][0]
             logger.log("INFO", "READ", "read sent to remote server "+old+" "+ip)
             packet = Packet(old, "READ", {}, {}, 0, [ip], [0, 0])
             tcpclient = TCPClient()
@@ -601,7 +601,7 @@ class Amfora(LoggingMixIn, Operations):
                 self.cdata[new] = rpacket.data[old]
 
         self.cmeta[new]['key'] = misc.hash(new)
-        self.cmeta[new]['location'] = localip
+        self.cmeta[new]['location'] = [localip]
         
         if old in self.meta:
             self.meta.pop(old)
@@ -680,7 +680,7 @@ class Amfora(LoggingMixIn, Operations):
         ips = misc.findserver(path)
         for ip in ips:
             if ip == localip:
-                dst = self.meta[path]['location']
+                dst = self.meta[path]['location'][0]
                 self.meta.pop(path)
             else:
                 packet = Packet(path, "UNLINK", {}, {}, 0, [ip], None)
@@ -689,7 +689,7 @@ class Amfora(LoggingMixIn, Operations):
                     logger.log("ERROR", "UNLINK", "unlink "+path+" failed")
                     raise FuseOSError(ENOENT)
                 else:
-                    dst = ret.meta[path]['location']
+                    dst = ret.meta[path]['location'][0]
         if path in self.meta:
             self.meta.pop(path)
 
@@ -1013,7 +1013,7 @@ class Amfora(LoggingMixIn, Operations):
             
     def local_updatelocation(self, path, meta):
         global logger
-        logger.log("INFO", "local_updatelocation", path+" location: "+meta['location'])
+        logger.log("INFO", "local_updatelocation", path+" location: "+meta['location'][0])
         
     def local_load(self, dst, filel):
         global logger
@@ -1870,7 +1870,7 @@ class TCPworker(threading.Thread):
                     k = packet.misc.pop()
                     v = packet.meta.pop(k)
                     amfora.meta[k] = v
-                    amfora.meta[k]['location'] = localip
+                    amfora.meta[k]['location'] = [localip]
                     amfora.data[k] = packet.data.pop(k)
                     amfora.cdata[k] = amfora.data[k]
                     rmeta[k] = amfora.meta[k]
