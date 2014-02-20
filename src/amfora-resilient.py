@@ -2428,13 +2428,31 @@ class Executor():
     
     def run(self):
         global logger
+        global amfora
         global mountpoint
+        global resilience_option
+        
         logger.log('INFO', 'Executor_run', 'executor started')
         while True:
             if self.readyqueue.empty():
                 break
             task = self.readyqueue.get(True, None)
             logger.log('INFO', 'Executor_run', 'running task: '+task.desc)
+            #The following code is to figure out the input and output files of this task,
+            #This is a two step procedure
+            inlist=[]
+            outlist=[]
+            files=task.desc.split()
+            for f in files:
+                if len(f) > len(mountpoint) and f[:len(mountpoint)]==mountpoint:
+                    f = f[len(mountpoint):]
+                if f in amfora.cdata:
+                    inlist.append(f)
+                    continue
+                elif f in amfora.data:
+                    inlist.append(f)
+                    continue
+
             task.starttime = time()
             p = subprocess.Popen(task.desc, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = p.communicate()
@@ -2443,14 +2461,26 @@ class Executor():
             self.smap[task.desc+" "+str(task.key)] = task.ret
             if task.ret != 0:
                 self.emap[task.desc+" "+str(task.key)] = stderr
-            #self.fqueue.append(task)
+            #This is the second step
+            for f in files:
+                if len(f) > len(mountpoint) and f[:len(mountpoint)]==mountpoint:
+                    f = f[len(mountpoint):]
+                if f in amfora.cdata and f not in inlist:
+                    outlist.append(f)
+                    continue
+                if f in amfora.data and f not in inlist:
+                    inlist.append(f)
+                    continue
+
             logger.log('INFO', 'Executor_run', 'finishing task: '+task.desc)
+            logger.log('INFO', 'Executor_run', 'input files: '+str(inlist))
+            logger.log('INFO', 'Executor_run', 'output files: '+str(outlist))
         logger.log('INFO', 'Executor_run', 'all tasks finished')
 
 
 if __name__ == '__main__':
-    if len(argv) != 6:
-        print(('usage: %s <mountpoint> <amfs.conf> <localip> <replication_factor> <MTTF>' % argv[0]))
+    if len(argv) != 7:
+        print(('usage: %s <mountpoint> <amfs.conf> <localip> <replication_factor> <MTTF> <resilience_option>' % argv[0]))
         exit(1)
         
     global logger
@@ -2463,7 +2493,16 @@ if __name__ == '__main__':
     replication_factor = int(argv[4])
     global MTTF
     MTTF = int(argv[5])
-    logger.log("INFO", "main", "resilient feature: replication_factor: "+str(replication_factor)+"  MTTF: "+str(MTTF))
+    '''
+    resilience_option is an integer,
+    0 indicates using temporal replication
+    1 indicates using spatial replication
+    2 indicates using dynamic replication
+    '''
+    global resilience_option
+    resilience_option = int(argv[6])
+
+    logger.log("INFO", "main", "resilient feature: replication_factor: "+str(replication_factor)+"  MTTF: "+str(MTTF)+" Resilience_option: "+str(resilience_option))
     global parentip
     parentip = ''
 
