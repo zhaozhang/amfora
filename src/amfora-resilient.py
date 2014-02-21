@@ -60,7 +60,7 @@ class Amfora(LoggingMixIn, Operations):
         #initializing the root directory
         now = time()
         self.meta['/'] = dict(st_mode=(S_IFDIR | 0o755), st_ctime=now,
-                               st_mtime=now, st_atime=now, st_nlink=2, location=[], key=None)
+                               st_mtime=now, st_atime=now, st_nlink=2, location=[], key=None, task="")
 
     '''    
     below are collective interface
@@ -402,7 +402,7 @@ class Amfora(LoggingMixIn, Operations):
         logger.log("INFO", "CREATE", path+", "+str(mode))
         self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
                                      st_size=0, st_ctime=time(), st_mtime=time(), 
-                                     st_atime=time(), location=[localip], key=misc.hash(path))
+                                     st_atime=time(), location=[localip], key=misc.hash(path), task="")
         #self.cdata[path]=b'' 
         self.cdata[path]=bytearray()
         self.fd += 1
@@ -760,14 +760,14 @@ class Amfora(LoggingMixIn, Operations):
         #this release function should update metadta to all replications
         ips = misc.findserver(path)
 
-        if path in self.cmeta:
+        if path in self.cmeta and path not in self.meta:
             self.data[path] = self.cdata[path]
+ 
             ret = 0
             for ip in ips:
                 if ip == localip:
-                    self.meta[path] = self.cmeta[path]
-                elif path in self.meta:
-                    pass
+                    logger.log("INFO", "RELEASE", "release sent to local server: "+path+" "+ip)
+                    continue
                 else:
                     logger.log("INFO", "RELEASE", "release sent to remote server: "+path+" "+ip)
                     tempdict = dict()
@@ -778,6 +778,8 @@ class Amfora(LoggingMixIn, Operations):
                     if rpacket.ret != 0:
                         logger.log("ERROR", "RELEASE", path+" failed")
                     ret = ret + rpacket.ret  
+            self.meta[path] = self.cmeta[path]
+            print(path+": "+str(self.meta[path]))
             return ret        
         else:
             return 0
@@ -872,7 +874,7 @@ class Amfora(LoggingMixIn, Operations):
             return 1
         else:
             nlink = self.meta[parent]['st_nlink']
-            self.meta[path] = dict(st_mode=(S_IFDIR | mode), st_nlink=nlink+1, st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time(), location=[], key=None)
+            self.meta[path] = dict(st_mode=(S_IFDIR | mode), st_nlink=nlink+1, st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time(), location=[], key=None, task="")
             self.meta[parent]['st_nlink'] += 1
             return 0
 
@@ -911,10 +913,11 @@ class Amfora(LoggingMixIn, Operations):
         logger.log("INFO", "local_rename", "old: "+old+" new: "+new)
         pass
 
-    def local_insert(self, path, meta):
+    def local_insert(self, path, data):
         global logger
         logger.log("INFO", "local_insert", path)
-        pass
+        self.data[path] = data[path]
+        return 0
 
     def local_rmdir(self, path):
         global logger
@@ -1011,10 +1014,15 @@ class Amfora(LoggingMixIn, Operations):
         if path not in self.meta:
             self.meta[path] = meta[path]
             
-    def local_updatelocation(self, path, meta):
+    def local_updatemeta(self, path, meta):
         global logger
-        logger.log("INFO", "local_updatelocation", path+" location: "+meta['location'][0])
-        
+        logger.log("INFO", "local_updatemeta", path+" location: "+str(meta[path]['location']))
+        if path not in self.meta:
+            return None
+        else:
+            self.meta[path] = meta[path]
+            return 0
+
     def local_load(self, dst, filel):
         global logger
         logger.log("INFO", "local_load", "loading "+str(filel)+" to "+dst)
@@ -1038,6 +1046,7 @@ class Amfora(LoggingMixIn, Operations):
             fd.write(self.data[fname])
             fd.close()
         logger.log("INFO", "local_dump", "finished dumping")    
+
 
 class TCPClient():
     def __init__(self):
@@ -1807,20 +1816,16 @@ class TCPworker(threading.Thread):
                 data = ramdisk.local_rename(old, new)
                 conn.send(bytes(str(data), "utf8"))
                 conn.close()
-            elif packet.op == 'INSERTMETA':
-                path = el[0]
-                msize = int(el[2])
-                #print("INSERTMETA: size: "+str(msize))
-                conn.send(bytes('0', 'utf8'))
-                data = conn.recv(msize)
-                meta = pickle.loads(data)
-                #print("INSERTMETA: meta: "+str(meta))
-                data = ramdisk.local_insert(path, meta)
-                conn.send(bytes(str(data), "utf8"))
+            elif packet.op == 'INSERTDATA':
+                path = packet.path
+                data = packet.data
+                remoteip, remoteport = conn.getpeername()
+                ret = amfora.local_insert(path, data)
+                p = Packet(packet.path, packet.op, None, None, ret, [remoteip], None)
+                self.sendpacket(conn, p)
                 conn.close()
             elif packet.op == 'APPENDDATA':
                 path = el[0]
-                msize = int(el[2])
                 offset = int(el[3])
                 data = conn.recv(msize)
                 content = pickle.loads(data)
@@ -1828,16 +1833,12 @@ class TCPworker(threading.Thread):
                 conn.send(bytes(str(0), "utf8"))
                 conn.close()
             elif packet.op == 'UPDATE':
-                path = el[0]
-                msize = int(el[2])
-                conn.send(bytes('0', 'utf8'))
-                temp = b''
-                while len(temp) < msize:
-                    data = conn.recv(msize-len(temp))
-                    temp = temp + data 
-                meta = pickle.loads(temp)                
-                ret = ramdisk.local_updatelocation(path, meta)
-                conn.send(bytes(str(ret), "utf8"))
+                path = packet.path
+                meta = packet.meta
+                remoteip, remoteport = conn.getpeername()
+                ret = amfora.local_updatemeta(path, meta)
+                p = Packet(packet.path, packet.op, None, None, ret, [remoteip], None)
+                self.sendpacket(conn, p)
                 conn.close()
             elif packet.op == 'MULTICAST':
                 path = packet.path
@@ -2119,6 +2120,18 @@ class Misc():
             nextindex = index + 1
         nextip = slist[nextindex]
         return nextip
+
+    def findneighbor(self):
+        global localip
+        global slist
+        global replication_factor
+        index = slist.index(localip)
+        
+        rlist=[]
+        for i in range(replication_factor-1):
+            if i < len(slist):
+                rlist.append(slist[(index+i+1)%len(slist)])
+        return rlist
 
     def reorderip(self):
         global localip
@@ -2461,6 +2474,8 @@ class Executor():
             self.smap[task.desc+" "+str(task.key)] = task.ret
             if task.ret != 0:
                 self.emap[task.desc+" "+str(task.key)] = stderr
+
+                
             #This is the second step
             for f in files:
                 if len(f) > len(mountpoint) and f[:len(mountpoint)]==mountpoint:
@@ -2472,11 +2487,112 @@ class Executor():
                     inlist.append(f)
                     continue
 
+            while f not in amfora.meta:
+                continue
+
             logger.log('INFO', 'Executor_run', 'finishing task: '+task.desc)
             logger.log('INFO', 'Executor_run', 'input files: '+str(inlist))
             logger.log('INFO', 'Executor_run', 'output files: '+str(outlist))
+            if resilience_option == 0:
+                self.replicate_temporal(outlist, task.desc)
+            elif resilience_option == 1:
+                self.replicate_spatial(outlist, task.desc)
+            elif resilience_option == 2:
+                bandwidth=128000000
+                total_data = 0
+                for f in inlist:
+                    total_data = total_data + len(amfora.data[f])
+                expected_failure = 0.0
+                t_tran = 0.0
+                for i in range(len(inlist)):
+                    t_tran = t_tran+1.0*len(amfora.data[inlist[i]])/bandwidth
+                    f_failure = 2.0*t_tran/MTTF
+                    expected_failure = expected_failure+f_failure
+                expected_temporal = expected_failure*(task.endtime-task.starttime)    
+                expected_spatial = 1.0*total_data/bandwidth
+                
+                print("expected_temporal: "+str(expected_temporal)+"    expected_spatial: "+str(expected_spatial))
+                if expected_temporal > expected_spatial:
+                    self.replicate_spatial(outlist, task.desc)
+                elif expected_temporal <= expected_spatial:
+                    self.replicate_temporal(outlist, task.desc)
+
         logger.log('INFO', 'Executor_run', 'all tasks finished')
 
+    #replication functions
+    def replicate_temporal(self, outlist, task) :
+        global logger
+        global misc
+        global localip
+        global amfora
+        logger.log("INFO", "replicate_temporal", "replicate_temporal: "+str(outlist)+" "+task)
+        
+        for f in outlist:
+            ips = misc.findserver(f)
+
+            #insert task to metadata locally
+            amfora.cmeta[f]['task'] = task
+            amfora.meta[f]['task'] = task
+
+            ret = 0    
+            for ip in ips:
+                if ip == localip:
+                    continue
+                tempdict = dict()
+                tempdict[f] = amfora.cmeta[f]
+                packet = Packet(f, "UPDATE", tempdict, None, None, [ip], None)
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "UPDATE", f+" failed")
+                ret = ret + rpacket.ret
+        return ret
+        
+    def replicate_spatial(self, outlist, task) :
+        global logger
+        global misc
+        global localip
+        global amfora
+        logger.log("INFO", "replicate_spatial", "replicate_spatial: "+str(outlist)+" "+task)
+
+        for f in outlist:
+            suc_ip = []
+            ips = misc.findneighbor()
+            print("findneighbor: "+str(ips))    
+
+            #replicate data to neighbors
+            for ip in ips:
+                if ip == localip:
+                    continue
+                tempdict = dict()
+                tempdict[f] = amfora.cdata[f]
+                packet = Packet(f, "INSERTDATA", None, tempdict, None, [ip], None)
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "INSERTDATA", f+" failed")
+                else:
+                    suc_ip.append(ip)
+
+            #insert task to metadata locally
+            amfora.cmeta[f]['location'].extend(suc_ip)
+            amfora.cmeta[f]['task'] = task
+            amfora.meta[f] = amfora.cmeta[f]
+
+            #update metadata remotely
+
+            ips = misc.findserver(f)
+            ret = 0    
+            for ip in ips:
+                tempdict = dict()
+                tempdict[f] = amfora.cmeta[f]
+                packet = Packet(f, "UPDATE", tempdict, None, None, [ip], None)
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendpacket(packet)
+                if rpacket.ret != 0:
+                    logger.log("ERROR", "UPDATE", f+" failed")
+                ret = ret + rpacket.ret
+        return 0
 
 if __name__ == '__main__':
     if len(argv) != 7:
@@ -2543,7 +2659,7 @@ if __name__ == '__main__':
 
     #start two worker threads to avoid the deadlock generated by concurrent collective operations and POSIX operations    
     workerl = []    
-    for i in range(2):
+    for i in range(1):
         tcpworker = TCPworker('TCPworker'+str(i))
         while not tcpworker.is_alive():
             tcpworker.start()
