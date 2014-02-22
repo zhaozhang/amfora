@@ -762,7 +762,7 @@ class Amfora(LoggingMixIn, Operations):
 
         if path in self.cmeta and path not in self.meta:
             self.data[path] = self.cdata[path]
- 
+            self.meta[path] = self.cmeta[path] 
             ret = 0
             for ip in ips:
                 if ip == localip:
@@ -778,7 +778,7 @@ class Amfora(LoggingMixIn, Operations):
                     if rpacket.ret != 0:
                         logger.log("ERROR", "RELEASE", path+" failed")
                     ret = ret + rpacket.ret  
-            self.meta[path] = self.cmeta[path]
+
             print(path+": "+str(self.meta[path]))
             return ret        
         else:
@@ -1020,7 +1020,8 @@ class Amfora(LoggingMixIn, Operations):
         if path not in self.meta:
             return None
         else:
-            self.meta[path] = meta[path]
+            if self.meta[path] == "":
+                self.meta[path] = meta[path]
             return 0
 
     def local_load(self, dst, filel):
@@ -1057,6 +1058,7 @@ class TCPClient():
         global logger
         logger.log("INFO", "TCPclient_init_port", "connecting to "+ip+":"+str(port))
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setblocking(True)
         connected = 0
         while connected == 0:
             try:
@@ -2459,15 +2461,12 @@ class Executor():
             for f in files:
                 if len(f) > len(mountpoint) and f[:len(mountpoint)]==mountpoint:
                     f = f[len(mountpoint):]
-                if f in amfora.cdata:
+                if f in amfora.cdata or f in amfora.data:
                     inlist.append(f)
-                    continue
-                elif f in amfora.data:
-                    inlist.append(f)
-                    continue
 
             task.starttime = time()
-            p = subprocess.Popen(task.desc, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p = subprocess.Popen(task.desc, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+            p.wait()
             stdout, stderr = p.communicate()
             task.endtime = time()
             task.ret = p.returncode
@@ -2482,13 +2481,11 @@ class Executor():
                     f = f[len(mountpoint):]
                 if f in amfora.cdata and f not in inlist:
                     outlist.append(f)
-                    continue
                 if f in amfora.data and f not in inlist:
                     inlist.append(f)
-                    continue
 
-            while f not in amfora.meta:
-                continue
+            #while f not in amfora.meta:
+            #    continue
 
             logger.log('INFO', 'Executor_run', 'finishing task: '+task.desc)
             logger.log('INFO', 'Executor_run', 'input files: '+str(inlist))
@@ -2670,5 +2667,5 @@ if __name__ == '__main__':
         interfaceserver.start()
 
 
-    fuse = FUSE(amfora, mountpoint, foreground=True, big_writes=True, direct_io=True)
-
+    fuse = FUSE(amfora, mountpoint, foreground=True, nothreads=False, big_writes=True, direct_io=True)
+    
