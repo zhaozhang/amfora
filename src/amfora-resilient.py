@@ -2438,6 +2438,7 @@ class Executor():
         self.readyqueue = queue.Queue()
         self.fmap = {} #key-file, value-task
         self.tlist = tlist
+        #count how many tasks are there in the beginning for space constraint calulation
         for t in tlist:
             self.readyqueue.put(t, True, None)
     
