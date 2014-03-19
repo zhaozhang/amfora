@@ -23,6 +23,7 @@ import codecs
 import zlib
 import math
 import re
+import random
 
 '''
 Amfora is a shared in-memory file system. Amfora is POSIX compatible.
@@ -526,7 +527,12 @@ class Amfora(LoggingMixIn, Operations):
         elif path in self.cdata:
             return bytes(self.cdata[path][offset:offset+size])
         else:
-            ip = self.meta[path]['location'][0]
+            if (len(self.meta[path]['location'])) == 1:
+                ip = self.meta[path]['location'][0]
+            else:
+                ips = self.meta[path]['location']
+                r = random.uniform(0, len(ips))
+                ip = ips[int(r)]
             logger.log("INFO", "READ", "read sent to remote server "+path+" "+ip)
             packet = Packet(path, "READ", {}, {}, 0, [ip], [size, offset])
             tcpclient = TCPClient()
@@ -782,6 +788,8 @@ class Amfora(LoggingMixIn, Operations):
             print(path+": "+str(self.meta[path]))
             return ret        
         else:
+            if path in self.meta:
+                print(path+": "+str(self.meta[path]))
             return 0
 
     def type(self, src, typedef):
@@ -1107,7 +1115,7 @@ class TCPClient():
 
                 #get the packet size
                 length = len(bpacket)
-                logger.log("INFO", "TCPclient.sendpacket()", "ready to send "+str(length)+" bytes")
+                #logger.log("INFO", "TCPclient.sendpacket()", "ready to send "+str(length)+" bytes")
 
                 #paddling the length of the packet to a 16 bytes number
                 slength = str(length)
@@ -1126,8 +1134,8 @@ class TCPClient():
                     else:
                         sent_iter = s.send(bpacket[sent:])
                     sent = sent + sent_iter
-                    logger.log("INFO", "TCPclient.sendpacket()", "send "+str(sent_iter)+" bytes")
-                logger.log("INFO", "TCPclient.sendpacket()", "totally send "+str(sent)+" bytes")    
+                    #logger.log("INFO", "TCPclient.sendpacket()", "send "+str(sent_iter)+" bytes")
+                #logger.log("INFO", "TCPclient.sendpacket()", "totally send "+str(sent)+" bytes")    
 
                 #receive the size of the returned packet
                 data = s.recv(self.psize)
@@ -1142,8 +1150,8 @@ class TCPClient():
                         temp = s.recv(length-rect)
                     rect = rect + len(temp)
                     data = data + temp
-                    logger.log("INFO", "TCPclient.sendpacket()", "receive "+str(len(temp))+" bytes")
-                logger.log("INFO", "TCPclient.sendpacket()", "totally receive "+str(len(data))+" bytes")    
+                    #logger.log("INFO", "TCPclient.sendpacket()", "receive "+str(len(temp))+" bytes")
+                #logger.log("INFO", "TCPclient.sendpacket()", "totally receive "+str(len(data))+" bytes")    
                 s.close()
                 packet = pickle.loads(data)
             except Exception as msg:
@@ -1189,8 +1197,8 @@ class TCPClient():
                     else:
                         sent_iter = s.send(bpacket[sent:])
                     sent = sent + sent_iter
-                    logger.log("INFO", "TCPclient.one_sided_sendpacket()", "send "+str(sent_iter)+" bytes")
-                logger.log("INFO", "TCPclient.one_sided_sendpacket()", "totally send "+str(sent)+" bytes")    
+                    #logger.log("INFO", "TCPclient.one_sided_sendpacket()", "send "+str(sent_iter)+" bytes")
+                #logger.log("INFO", "TCPclient.one_sided_sendpacket()", "totally send "+str(sent)+" bytes")    
             except socket.error as msg:
                 logger.log("ERROR", "TCPclient.one_sided_sendpacket()", "Socket Exception: "+str(msg))
             except Exception as msg:
@@ -1599,7 +1607,7 @@ class TCPserver(threading.Thread):
             try:
                 data = conn.recv(self.psize)
                 length = int(data.decode('utf8').strip('\0'))
-                logger.log("INFO", "TCPServer.run()", "ready to receive "+str(length)+" bytes")
+                #logger.log("INFO", "TCPServer.run()", "ready to receive "+str(length)+" bytes")
                 conn.send(bytes('0', 'utf-8'))
                 rect = 0
                 bpacket = b''
@@ -1611,8 +1619,8 @@ class TCPserver(threading.Thread):
                         temp = conn.recv(length-rect)
                     rect = rect + len(temp)
                     bpacket = bpacket+temp
-                    logger.log("INFO", "TCPServer.run()", "receive "+str(len(temp))+" bytes")
-                logger.log("INFO", "TCPServer.run()", "totally receive "+str(len(bpacket))+" bytes")    
+                    #logger.log("INFO", "TCPServer.run()", "receive "+str(len(temp))+" bytes")
+                #logger.log("INFO", "TCPServer.run()", "totally receive "+str(len(bpacket))+" bytes")    
             except socket.error:
                 logger.log("ERROR", "TCPserver_run", "socket exception when receiving message "+str(socket.error))
                 break
@@ -1636,7 +1644,7 @@ class TCPworker(threading.Thread):
 
             #get the packet size
             length = len(bpacket)
-            logger.log("INFO", "TCPworker.sendpacket()", "ready to send "+str(length)+" bytes")
+            #logger.log("INFO", "TCPworker.sendpacket()", "ready to send "+str(length)+" bytes")
 
             #paddling the length of the packet to a 16 bytes number
             slength = str(length)
@@ -1655,8 +1663,8 @@ class TCPworker(threading.Thread):
                 else:
                     sent_iter = sock.send(bpacket[sent:])
                 sent = sent + sent_iter
-                logger.log("INFO", "TCPworker.sendpacket()", "send "+str(sent_iter)+" bytes")
-            logger.log("INFO", "TCPworker.sendpacket()", "totally send "+str(sent)+" bytes")    
+                #logger.log("INFO", "TCPworker.sendpacket()", "send "+str(sent_iter)+" bytes")
+            #logger.log("INFO", "TCPworker.sendpacket()", "totally send "+str(sent)+" bytes")    
         except socket.error as msg:
             logger.log("ERROR", "TCPworker.sendpacket()", "Socket Exception: "+str(msg))
         except Exception as msg:
@@ -1976,7 +1984,7 @@ class Interfaceserver(threading.Thread):
 
             #get the packet size
             length = len(bpacket)
-            logger.log("INFO", "Interfaceserver_sendpacket()", "ready to send "+str(length)+" bytes")
+            #logger.log("INFO", "Interfaceserver_sendpacket()", "ready to send "+str(length)+" bytes")
 
             #paddling the length of the packet to a 16 bytes number
             slength = str(length)
@@ -1995,8 +2003,8 @@ class Interfaceserver(threading.Thread):
                 else:
                     sent_iter = sock.send(bpacket[sent:])
                 sent = sent + sent_iter
-                logger.log("INFO", "Interfaceserver_sendpacket()", "send "+str(sent_iter)+" bytes")
-            logger.log("INFO", "Interfaceserver_sendpacket()", "totally send "+str(sent)+" bytes")    
+                #logger.log("INFO", "Interfaceserver_sendpacket()", "send "+str(sent_iter)+" bytes")
+            #logger.log("INFO", "Interfaceserver_sendpacket()", "totally send "+str(sent)+" bytes")    
         except socket.error as msg:
             logger.log("ERROR", "Interfaceserver__sendpacket()", "Socket Exception: "+str(msg))
         except Exception as msg:
@@ -2090,7 +2098,7 @@ class Misc():
         global replication_factor
         rlist = []
         value = zlib.adler32(bytes(fname, 'utf8')) & 0xffffffff
-        for i in range(replication_factor-1):
+        for i in range(replication_factor):
             if i < len(slist):
                 rlist.append(slist[(value%(len(slist))+i)%len(slist)])
         print("metadata of "+fname+" are stored on: "+str(rlist))        
@@ -2318,7 +2326,7 @@ class CollectiveThread(threading.Thread):
                     peer = conn.getpeername()[0]
                     data = conn.recv(self.psize)
                     length = int(data.decode('utf8').strip('\0'))
-                    logger.log("INFO", "CollThread_run()", "ready to receive "+str(length)+" bytes")
+                    #logger.log("INFO", "CollThread_run()", "ready to receive "+str(length)+" bytes")
                     conn.send(bytes('0', 'utf8'))
                     data = b''
                     rect = 0
@@ -2329,8 +2337,8 @@ class CollectiveThread(threading.Thread):
                             temp = conn.recv(length-rect)
                         rect = rect + len(temp)
                         data = data + temp
-                        logger.log("INFO", "CollThread_run()", "receive "+str(len(temp))+" bytes")
-                    logger.log("INFO", "CollThread_run()", "totally receive "+str(len(data))+" bytes")    
+                        #logger.log("INFO", "CollThread_run()", "receive "+str(len(temp))+" bytes")
+                    #logger.log("INFO", "CollThread_run()", "totally receive "+str(len(data))+" bytes")    
                     conn.close()
                     tp = pickle.loads(data)
                     self.packet.meta.update(tp.meta)
@@ -2491,11 +2499,11 @@ class Executor():
             logger.log('INFO', 'Executor_run', 'finishing task: '+task.desc)
             logger.log('INFO', 'Executor_run', 'input files: '+str(inlist))
             logger.log('INFO', 'Executor_run', 'output files: '+str(outlist))
-            if resilience_option == 0:
+            if resilience_option == 1:
                 self.replicate_temporal(outlist, task.desc)
-            elif resilience_option == 1:
-                self.replicate_spatial(outlist, task.desc)
             elif resilience_option == 2:
+                self.replicate_spatial(outlist, task.desc)
+            elif resilience_option == 3:
                 bandwidth=128000000
                 total_data = 0
                 for f in inlist:
@@ -2609,9 +2617,10 @@ if __name__ == '__main__':
     MTTF = int(argv[5])
     '''
     resilience_option is an integer,
-    0 indicates using temporal replication
-    1 indicates using spatial replication
-    2 indicates using dynamic replication
+    0 indicates doing nothing
+    1 indicates using temporal replication
+    2 indicates using spatial replication
+    3 indicates using dynamic replication
     '''
     global resilience_option
     resilience_option = int(argv[6])
@@ -2657,7 +2666,7 @@ if __name__ == '__main__':
 
     #start two worker threads to avoid the deadlock generated by concurrent collective operations and POSIX operations    
     workerl = []    
-    for i in range(1):
+    for i in range(2):
         tcpworker = TCPworker('TCPworker'+str(i))
         while not tcpworker.is_alive():
             tcpworker.start()
