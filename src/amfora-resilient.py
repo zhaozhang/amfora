@@ -61,7 +61,7 @@ class Amfora(LoggingMixIn, Operations):
         #initializing the root directory
         now = time()
         self.meta['/'] = dict(st_mode=(S_IFDIR | 0o755), st_ctime=now,
-                               st_mtime=now, st_atime=now, st_nlink=2, location=[], key=None, task="")
+                               st_mtime=now, st_atime=now, st_nlink=2, location=[], key=None, task="", e_recovery=0.0)
 
     '''    
     below are collective interface
@@ -403,7 +403,7 @@ class Amfora(LoggingMixIn, Operations):
         logger.log("INFO", "CREATE", path+", "+str(mode))
         self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
                                      st_size=0, st_ctime=time(), st_mtime=time(), 
-                                     st_atime=time(), location=[localip], key=misc.hash(path), task="")
+                                     st_atime=time(), location=[localip], key=misc.hash(path), task="", e_recovery=0.0)
         #self.cdata[path]=b'' 
         self.cdata[path]=bytearray()
         self.fd += 1
@@ -520,6 +520,7 @@ class Amfora(LoggingMixIn, Operations):
     def read(self, path, size, offset, fh):
         global logger
         global misc
+        global resilience_option
         logger.log("INFO", "READ", path+", "+str(size)+", "+str(offset))
 
         if path in self.data:
@@ -527,22 +528,25 @@ class Amfora(LoggingMixIn, Operations):
         elif path in self.cdata:
             return bytes(self.cdata[path][offset:offset+size])
         else:
-            if (len(self.meta[path]['location'])) == 1:
-                ip = self.meta[path]['location'][0]
-            else:
-                ips = self.meta[path]['location']
-                r = random.uniform(0, len(ips))
-                ip = ips[int(r)]
-            logger.log("INFO", "READ", "read sent to remote server "+path+" "+ip)
-            packet = Packet(path, "READ", {}, {}, 0, [ip], [size, offset])
-            tcpclient = TCPClient()
-            rpacket = tcpclient.sendpacket(packet)
-            if not rpacket.data:
-                logger.log("ERROR", "READ", "remote read on "+path+" failed on "+ip)
-                return None
-            else:
-                self.data[path] = rpacket.data[path]
-                return bytes(self.data[path][offset:offset + size])
+            ips = self.meta[path]['location']
+            #r = random.uniform(0, len(ips))
+            #ip = ips[int(r)]
+            for ip in ips:
+                logger.log("INFO", "READ", "read sent to remote server "+path+" "+ip)
+                packet = Packet(path, "READ", {}, {}, 0, [ip], [size, offset])
+                tcpclient = TCPClient()
+                rpacket = tcpclient.sendpacket(packet)
+                if not rpacket.data:
+                    logger.log("ERROR", "READ", "remote read on "+path+" failed on "+ip)
+                    if len(ips) > 1:
+                        continue
+                    elif resilience_option == 0:
+                        logger.log("ERROR", "READ", "file "+path+" is lost due to failure on "+ip)
+                    elif resilience_option == 1 or resilience_option == 3:    
+                        logger.log("INFO", "READ", "ready to recover "+path+" by running ("+self.meta[path]['task']+")")
+                else:
+                    self.data[path] = rpacket.data[path]
+                    return bytes(self.data[path][offset:offset + size])
 
     def readdir(self, path, fh):
         global logger
@@ -762,11 +766,13 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         global localip
+        global bandwidth
         logger.log("INFO", "RELEASE", path)
         #this release function should update metadta to all replications
         ips = misc.findserver(path)
 
         if path in self.cmeta and path not in self.meta:
+            self.cmeta[path]['e_recovery'] = 1.0*self.cmeta[path]['st_size']/bandwidth
             self.data[path] = self.cdata[path]
             self.meta[path] = self.cmeta[path] 
             ret = 0
@@ -882,7 +888,7 @@ class Amfora(LoggingMixIn, Operations):
             return 1
         else:
             nlink = self.meta[parent]['st_nlink']
-            self.meta[path] = dict(st_mode=(S_IFDIR | mode), st_nlink=nlink+1, st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time(), location=[], key=None, task="")
+            self.meta[path] = dict(st_mode=(S_IFDIR | mode), st_nlink=nlink+1, st_size=0, st_ctime=time(), st_mtime=time(), st_atime=time(), location=[], key=None, task="", e_recovery=0.0)
             self.meta[parent]['st_nlink'] += 1
             return 0
 
@@ -1030,6 +1036,10 @@ class Amfora(LoggingMixIn, Operations):
         else:
             if self.meta[path] == "":
                 self.meta[path] = meta[path]
+            elif len(meta[path]['location']) > len(self.meta[path]['location']):
+                self.meta[path] = meta[path]
+            elif self.meta[path]['task'] == "":
+                self.meta[path] = meta[path]
             return 0
 
     def local_load(self, dst, filel):
@@ -1072,9 +1082,10 @@ class TCPClient():
             try:
                 sock.connect((ip, port))
             except socket.error:
-                logger.log("ERROR", "TCPclient_init_port", "connect "+ip+" failed, try again")
-                sleep(1)
-                continue
+                logger.log("ERROR", "TCPclient_init_port", "connect "+ip+" failed")
+                return None
+                #sleep(1)
+                #continue
             else:
                 connected = 1
                 logger.log("INFO", "TCPclient_init_port", "connected to "+ip+":"+str(port))
@@ -1109,6 +1120,8 @@ class TCPClient():
             try:
                 #initialize the socket
                 s = self.init_port(packet.tlist[0], 55000)            
+                if not s:
+                    raise Exception('connect failed')
 
                 #dump packet into binary format
                 bpacket = pickle.dumps(packet)
@@ -2490,7 +2503,7 @@ class Executor():
                     f = f[len(mountpoint):]
                 if f in amfora.cdata and f not in inlist:
                     outlist.append(f)
-                if f in amfora.data and f not in inlist:
+                elif f in amfora.data and f not in inlist:
                     inlist.append(f)
 
             #while f not in amfora.meta:
@@ -2500,33 +2513,33 @@ class Executor():
             logger.log('INFO', 'Executor_run', 'input files: '+str(inlist))
             logger.log('INFO', 'Executor_run', 'output files: '+str(outlist))
             if resilience_option == 1:
-                self.replicate_temporal(outlist, task.desc)
+                self.replicate_temporal(outlist, task.desc, 0.0)
             elif resilience_option == 2:
-                self.replicate_spatial(outlist, task.desc)
+                self.replicate_spatial(outlist, task.desc, 0.0)
             elif resilience_option == 3:
-                bandwidth=128000000
+                global bandwidth
+
                 total_data = 0
                 for f in inlist:
                     total_data = total_data + len(amfora.data[f])
-                expected_failure = 0.0
+                expected_sum = 0.0
                 t_tran = 0.0
                 for i in range(len(inlist)):
                     t_tran = t_tran+1.0*len(amfora.data[inlist[i]])/bandwidth
-                    f_failure = 2.0*t_tran/MTTF
-                    expected_failure = expected_failure+f_failure
-                expected_temporal = expected_failure*(task.endtime-task.starttime)    
+                    expected_sum = expected_sum+amfora.meta[inlist[i]]['e_recovery']
+                expected_temporal = (task.endtime-task.starttime)+1.0*expected_sum/MTTF    
                 expected_spatial = 1.0*total_data/bandwidth
                 
                 print("expected_temporal: "+str(expected_temporal)+"    expected_spatial: "+str(expected_spatial))
                 if expected_temporal > expected_spatial:
-                    self.replicate_spatial(outlist, task.desc)
+                    self.replicate_spatial(outlist, task.desc, expected_spatial)
                 elif expected_temporal <= expected_spatial:
-                    self.replicate_temporal(outlist, task.desc)
+                    self.replicate_temporal(outlist, task.desc, expected_temporal)
 
         logger.log('INFO', 'Executor_run', 'all tasks finished')
 
     #replication functions
-    def replicate_temporal(self, outlist, task) :
+    def replicate_temporal(self, outlist, task, e_recovery) :
         global logger
         global misc
         global localip
@@ -2537,6 +2550,8 @@ class Executor():
             ips = misc.findserver(f)
 
             #insert task to metadata locally
+            amfora.cmeta[f]['e_recovery'] = e_recovery
+            amfora.meta[f]['e_recovery'] = e_recovery
             amfora.cmeta[f]['task'] = task
             amfora.meta[f]['task'] = task
 
@@ -2554,7 +2569,7 @@ class Executor():
                 ret = ret + rpacket.ret
         return ret
         
-    def replicate_spatial(self, outlist, task) :
+    def replicate_spatial(self, outlist, task, e_recovery) :
         global logger
         global misc
         global localip
@@ -2564,7 +2579,7 @@ class Executor():
         for f in outlist:
             suc_ip = []
             ips = misc.findneighbor()
-            print("findneighbor: "+str(ips))    
+            logger.log("INFO", "replicate_spatial", f+" is replicated at: "+str(ips))    
 
             #replicate data to neighbors
             for ip in ips:
@@ -2583,6 +2598,7 @@ class Executor():
             #insert task to metadata locally
             amfora.cmeta[f]['location'].extend(suc_ip)
             amfora.cmeta[f]['task'] = task
+            amfora.cmeta[f]['e_recovery'] = e_recovery
             amfora.meta[f] = amfora.cmeta[f]
 
             #update metadata remotely
@@ -2590,8 +2606,11 @@ class Executor():
             ips = misc.findserver(f)
             ret = 0    
             for ip in ips:
+                if ip == localip:
+                    continue
                 tempdict = dict()
                 tempdict[f] = amfora.cmeta[f]
+                print(tempdict[f]['location'])
                 packet = Packet(f, "UPDATE", tempdict, None, None, [ip], None)
                 tcpclient = TCPClient()
                 rpacket = tcpclient.sendpacket(packet)
@@ -2601,8 +2620,8 @@ class Executor():
         return 0
 
 if __name__ == '__main__':
-    if len(argv) != 7:
-        print(('usage: %s <mountpoint> <amfs.conf> <localip> <replication_factor> <MTTF> <resilience_option>' % argv[0]))
+    if len(argv) != 8:
+        print(('usage: %s <mountpoint> <amfs.conf> <localip> <replication_factor> <MTTF> <resilience_option> <bandwidth>' % argv[0]))
         exit(1)
         
     global logger
@@ -2625,7 +2644,11 @@ if __name__ == '__main__':
     global resilience_option
     resilience_option = int(argv[6])
 
-    logger.log("INFO", "main", "resilient feature: replication_factor: "+str(replication_factor)+"  MTTF: "+str(MTTF)+" Resilience_option: "+str(resilience_option))
+    global bandwidth
+    bandwidth = int(argv[7])
+
+    logger.log("INFO", "main", "resilient feature: replication_factor: "+str(replication_factor)+"  MTTF: "+str(MTTF)+" Resilience_option: "+str(resilience_option)+" Bandwidth: "+str(bandwidth)+"B/s")
+
     global parentip
     parentip = ''
 
