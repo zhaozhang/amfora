@@ -57,7 +57,7 @@ class Amfora(LoggingMixIn, Operations):
         self.cmeta = {}
         self.cdata = defaultdict(bytes)
         self.fd = 0
-        
+        self.recovery = {}
         #initializing the root directory
         now = time()
         self.meta['/'] = dict(st_mode=(S_IFDIR | 0o755), st_ctime=now,
@@ -414,6 +414,11 @@ class Amfora(LoggingMixIn, Operations):
         global misc
         global localip
         logger.log("INFO", "getattr", path)
+
+        if path in self.recovery:
+            if path not in self.cdata:
+                self.cdata[path] = bytearray()
+
         #flag, check exception here
         ips = misc.findserver(path)
         ip = ips[0]
@@ -543,10 +548,22 @@ class Amfora(LoggingMixIn, Operations):
                     elif resilience_option == 0:
                         logger.log("ERROR", "READ", "file "+path+" is lost due to failure on "+ip)
                     elif resilience_option == 1 or resilience_option == 3:    
-                        logger.log("INFO", "READ", "ready to recover "+path+" by running ("+self.meta[path]['task']+")")
+                        self.rerun(path)
+                        return bytes(self.cdata[path][offset:offset + size])
                 else:
                     self.data[path] = rpacket.data[path]
                     return bytes(self.data[path][offset:offset + size])
+
+    def rerun(self, path):
+        global logger
+        global mountpoint
+        logger.log("INFO", "RERUN", "Recover "+path+" by running ("+self.meta[path]['task']+")")
+        task = self.meta[path]['task']
+        if len(path) > len(mountpoint) and f[:len(mountpoint)]==mountpoint:
+            path = path[len(mountpoint):]
+        #print(path)
+        self.recovery[path] = 0
+        os.system(task)    
 
     def readdir(self, path, fh):
         global logger
@@ -664,11 +681,11 @@ class Amfora(LoggingMixIn, Operations):
         global misc
         logger.log("INFO", "truncate", path+", "+str(length))
 
-        if path in self.cdata:
-            self.cdata[path] = self.cdata[path][:length]
-            self.cmeta[path]['st_size'] = length
-        else:
-            print("truncate sent to remote server")
+        #if path in self.cdata:
+            #self.cdata[path] = self.cdata[path][:length]
+            #self.cmeta[path]['st_size'] = length
+        #else:
+            #print("truncate sent to remote server")
             #ip = misc.findserver(path)
             #packet = Packet(path, "truncate", None, None, None, ip, length)
             #tcpclient = TCPClient()
@@ -755,7 +772,10 @@ class Amfora(LoggingMixIn, Operations):
             if path in self.meta:
                 self.meta[path] = self.cmeta[path]
         else:
-            print("write+update+meta sent to remote server")
+            if path in self.recovery:
+                pass
+            else:
+                print("write+update+meta sent to remote server")
             #ip = misc.findserver(path)
             #packet = Packet(path, "updatesize", None, None, None, ip, data)
             #tcpclient = TCPClient()
@@ -769,6 +789,10 @@ class Amfora(LoggingMixIn, Operations):
         global bandwidth
         logger.log("INFO", "RELEASE", path)
         #this release function should update metadta to all replications
+        
+        if path in self.recovery:
+            return 0
+
         ips = misc.findserver(path)
 
         if path in self.cmeta and path not in self.meta:
@@ -1077,11 +1101,12 @@ class TCPClient():
         logger.log("INFO", "TCPclient_init_port", "connecting to "+ip+":"+str(port))
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setblocking(True)
+        sock.settimeout(3.0)
         connected = 0
         while connected == 0:
             try:
                 sock.connect((ip, port))
-            except socket.error:
+            except Exception:
                 logger.log("ERROR", "TCPclient_init_port", "connect "+ip+" failed")
                 return None
                 #sleep(1)
@@ -1186,6 +1211,9 @@ class TCPClient():
                 #initialize the socket
                 s = self.init_port(packet.tlist[0], port)            
 
+                if not s:
+                    raise Exception('connect failed')
+
                 #dump packet into binary format
                 bpacket = pickle.dumps(packet)
 
@@ -1216,8 +1244,9 @@ class TCPClient():
                 logger.log("ERROR", "TCPclient.one_sided_sendpacket()", "Socket Exception: "+str(msg))
             except Exception as msg:
                 logger.log("ERROR", "TCPclient.one_sided_sendpacket()", "Other Exception: "+str(msg))
-
-        
+                return None
+        return 0
+    
     def sendallpacket(self, packet):
         global logger
         global misc
@@ -1299,7 +1328,11 @@ class TCPClient():
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, filel)
             else:
                 op = Packet(packet.path, packet.op, packet.meta, packet.data, packet.ret, ol, packet.misc)
-            self.one_sided_sendpacket(op, 55000)
+                
+            ret = self.one_sided_sendpacket(op, 55000)
+            if ret == None:
+                logger.log("ERROR", "TCPclient.sendallpacket()", "Remove  "+op.tlist[0]+" from rlist")
+                rdict.pop(op.tlist[0])
         
         #start shuffleserver as a thread and shuffleclient    
         if packet.op == "SHUFFLE_START":
@@ -2108,13 +2141,14 @@ class Misc():
 
     def findserver(self, fname):
         global slist
+        global logger
         global replication_factor
         rlist = []
         value = zlib.adler32(bytes(fname, 'utf8')) & 0xffffffff
         for i in range(replication_factor):
             if i < len(slist):
                 rlist.append(slist[(value%(len(slist))+i)%len(slist)])
-        print("metadata of "+fname+" are stored on: "+str(rlist))        
+        logger.log("INFO", "Misc.findserver()", "metadata of "+fname+" are stored on: "+str(rlist))        
         return rlist
 
     def hash(self, fname):
@@ -2567,7 +2601,7 @@ class Executor():
                 if rpacket.ret != 0:
                     logger.log("ERROR", "UPDATE", f+" failed")
                 ret = ret + rpacket.ret
-        return ret
+            return 0    
         
     def replicate_spatial(self, outlist, task, e_recovery) :
         global logger
