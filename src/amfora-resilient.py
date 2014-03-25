@@ -361,6 +361,18 @@ class Amfora(LoggingMixIn, Operations):
         taskl = misc.readtask()
         packet=Packet("", "EXECUTE", {}, {}, 0, slist, taskl)
         rpacket = tcpclient.sendallpacket(packet)
+        if len(rpacket.misc) > 0:
+            print("execution failed on "+str(rpacket.tlist))
+            print("there are "+str(len(rpacket.misc))+" tasks remaining")
+            print("rerun the failed tasks on "+str(slist))
+            tlist = list(slist)
+            for ip in rpacket.tlist:
+                tlist.remove(ip)
+            packet = Packet("", "EXECUTE", {}, {}, 0, tlist, rpacket.misc)
+            rrpacket = tcpclient.sendallpacket(packet) 
+            rpacket.meta.update(rrpacket.meta)
+            rpacket.data.update(rrpacket.data)
+            logger.log("INFO", "EXECUTE", "second round execution finished "+str(rrpacket.meta))
         if sum(rpacket.meta.values()) != 0:
             logger.log("ERROR", "EXECUTE", "execution failed "+str(rpacket.meta)+"\n"+str(rpacket.data))
             return rpacket
@@ -526,7 +538,7 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         global resilience_option
-        logger.log("INFO", "READ", path+", "+str(size)+", "+str(offset))
+        #logger.log("INFO", "READ", path+", "+str(size)+", "+str(offset))
 
         if path in self.data:
             return bytes(self.data[path][offset:offset + size])
@@ -557,13 +569,17 @@ class Amfora(LoggingMixIn, Operations):
     def rerun(self, path):
         global logger
         global mountpoint
-        logger.log("INFO", "RERUN", "Recover "+path+" by running ("+self.meta[path]['task']+")")
+        logger.log("INFO", "RERUN", "Recover start "+path+" by running ("+self.meta[path]['task']+")")
         task = self.meta[path]['task']
-        if len(path) > len(mountpoint) and f[:len(mountpoint)]==mountpoint:
+        if len(path) > len(mountpoint) and path[:len(mountpoint)]==mountpoint:
             path = path[len(mountpoint):]
         #print(path)
         self.recovery[path] = 0
-        os.system(task)    
+        p = subprocess.Popen(task, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        p.wait()
+        stdout, stderr = p.communicate()
+        print(stderr)
+        logger.log("INFO", "RERUN", "Recover finish "+path+" by running ("+self.meta[path]['task']+")")
 
     def readdir(self, path, fh):
         global logger
@@ -604,6 +620,7 @@ class Amfora(LoggingMixIn, Operations):
         global misc
         global localip
         logger.log("INFO", "rename", "old: "+old+", new: "+new)
+        '''
         oldhash = misc.hash(old)
         newhash = misc.hash(new)
 
@@ -642,7 +659,7 @@ class Amfora(LoggingMixIn, Operations):
                 ret = tcpclient.sendpacket(packet)
     
         self.release(new, 0)
-    
+        '''
     def rmdir(self, path):
         #rmdir is a two step procedure
         #Step 1, remove the dir path and return the file meta within
@@ -699,6 +716,7 @@ class Amfora(LoggingMixIn, Operations):
         global localip
         global misc
         logger.log("INFO", "UNLINK", path)
+        '''
         #unlink is a two step procedure, first, we need to find the metadata of this file then remove the meta
         #second, clear the actual data 
         tcpclient = TCPClient()
@@ -735,7 +753,7 @@ class Amfora(LoggingMixIn, Operations):
                     logger.log("ERROR", "UNLINK", "remove "+path+" failed")
             if path in self.data:
                 self.data.pop(path)
-
+        '''        
     def utimens(self, path, times=None):
         global logger
         logger.log("INFO", "utimens", path)
@@ -744,7 +762,7 @@ class Amfora(LoggingMixIn, Operations):
     def write(self, path, data, offset, fh):
         global logger
         global misc
-        logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
+        #logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
         #write to the right place
         if path in self.cdata:
             if offset == len(self.cdata[path]):
@@ -1098,7 +1116,7 @@ class TCPClient():
 
     def init_port(self, ip, port):
         global logger
-        logger.log("INFO", "TCPclient_init_port", "connecting to "+ip+":"+str(port))
+        #logger.log("INFO", "TCPclient_init_port", "connecting to "+ip+":"+str(port))
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setblocking(True)
         sock.settimeout(3.0)
@@ -1113,7 +1131,7 @@ class TCPClient():
                 #continue
             else:
                 connected = 1
-                logger.log("INFO", "TCPclient_init_port", "connected to "+ip+":"+str(port))
+                #logger.log("INFO", "TCPclient_init_port", "connected to "+ip+":"+str(port))
         return sock
     
     def init_server(self, host, port):
@@ -1138,8 +1156,8 @@ class TCPClient():
         global logger
         global localip
         global amfora
-        logger.log("INFO", "TCPclient_sendpacket()", packet.path+" "+packet.op)
-
+        logger.log("INFO", "TCPclient_sendpacket() start", packet.path+" "+packet.op+" to "+str(packet.tlist))
+        tlist = list(packet.tlist)
         #Packet sent to a single host
         if len(packet.tlist) > 0:
             try:
@@ -1197,6 +1215,7 @@ class TCPClient():
                 packet = Packet("", "", None, None, 256, None, None)
                 return packet
             finally:
+                logger.log("INFO", "TCPclient_sendpacket() finish", packet.path+" "+packet.op+" to "+str(tlist))
                 return packet
 
     def one_sided_sendpacket(self, packet, port):
@@ -1276,6 +1295,9 @@ class TCPClient():
         colthread = CollectiveThread(server, rdict, packet)
         colthread.start()
 
+        unfinished_tasks = []
+        failed_ip = []
+
         meta = dict(packet.meta)
         data = dict(packet.data)
         total_tasks = 0
@@ -1332,6 +1354,9 @@ class TCPClient():
             ret = self.one_sided_sendpacket(op, 55000)
             if ret == None:
                 logger.log("ERROR", "TCPclient.sendallpacket()", "Remove  "+op.tlist[0]+" from rlist")
+                if op.op == "EXECUTE":
+                    unfinished_tasks.extend(op.misc)
+                    failed_ip.append(op.tlist[0])
                 rdict.pop(op.tlist[0])
         
         #start shuffleserver as a thread and shuffleclient    
@@ -1383,7 +1408,9 @@ class TCPClient():
             executor.run()
             packet.meta.update(executor.smap)
             packet.data.update(executor.emap)
-            logger.log("INFO", "TCPclient_sendallpacket()", "finished executing: "+str(len(packet.misc))+" tasks")
+            packet.misc = unfinished_tasks
+            packet.tlist = failed_ip
+            logger.log("INFO", "TCPclient_sendallpacket()", "finished executing: "+str(len(packet.meta.keys())+len(packet.data.keys()))+" tasks")
         elif packet.op == "LOAD":
             global amfora
             logger.log("INFO", "TCPclient_sendallpacket()", "read to load: "+str(packet.misc))
@@ -1683,7 +1710,7 @@ class TCPworker(threading.Thread):
         self.bufsize = 1048576
 
     def sendpacket(self, sock, packet):
-        logger.log("INFO", "TCPWorker.sendpacket()", "sending packet to "+str(packet.tlist))
+        logger.log("INFO", self.id+" TCPWorker_sendpacket() start", packet.path+" "+packet.op+" to "+str(packet.tlist))
         try:
             #dump packet into binary format
             bpacket = pickle.dumps(packet)
@@ -1712,10 +1739,11 @@ class TCPworker(threading.Thread):
                 #logger.log("INFO", "TCPworker.sendpacket()", "send "+str(sent_iter)+" bytes")
             #logger.log("INFO", "TCPworker.sendpacket()", "totally send "+str(sent)+" bytes")    
         except socket.error as msg:
-            logger.log("ERROR", "TCPworker.sendpacket()", "Socket Exception: "+str(msg))
+            logger.log("ERROR", self.id+" TCPworker.sendpacket()", "Socket Exception: "+str(msg))
         except Exception as msg:
-            logger.log("ERROR", "TCPworker.sendpacket()", "Other Exception: "+str(msg))
+            logger.log("ERROR", self.id+" TCPworker.sendpacket()", "Other Exception: "+str(msg))
         finally:
+            logger.log("INFO", self.id+" TCPWorker_sendpacket() finish", packet.path+" "+packet.op+" to "+str(packet.tlist))
             return sent
 
     def run(self):
@@ -2159,6 +2187,14 @@ class Misc():
         global localip
         vlist = list(slist)
         vlist.remove(localip)
+        #comment the following code to disable SEQ algorith
+        #while len(vlist) > 0:
+        #    temp = []
+        #    ip = vlist.pop()
+        #    temp.append(ip)
+        #    tlist.append(temp)    
+        #return tlist
+        #uncomment the following code to enable MST algorithm
         while len(vlist) > 0:
             temp = []
             for i in range(math.ceil(len(vlist)/2)):
@@ -2508,6 +2544,7 @@ class Executor():
             if self.readyqueue.empty():
                 break
             task = self.readyqueue.get(True, None)
+            logger.log('INFO', 'Executor_run start', '----------------------------------')
             logger.log('INFO', 'Executor_run', 'running task: '+task.desc)
             #The following code is to figure out the input and output files of this task,
             #This is a two step procedure
@@ -2535,9 +2572,11 @@ class Executor():
             for f in files:
                 if len(f) > len(mountpoint) and f[:len(mountpoint)]==mountpoint:
                     f = f[len(mountpoint):]
-                if f in amfora.cdata and f not in inlist:
+                if f in amfora.cdata and f not in inlist and f not in amfora.recovery:
                     outlist.append(f)
                 elif f in amfora.data and f not in inlist:
+                    inlist.append(f)
+                elif f in amfora.recovery and f not in inlist:
                     inlist.append(f)
 
             #while f not in amfora.meta:
@@ -2569,7 +2608,7 @@ class Executor():
                     self.replicate_spatial(outlist, task.desc, expected_spatial)
                 elif expected_temporal <= expected_spatial:
                     self.replicate_temporal(outlist, task.desc, expected_temporal)
-
+            logger.log('INFO', 'Executor_run end', '----------------------------------')        
         logger.log('INFO', 'Executor_run', 'all tasks finished')
 
     #replication functions
@@ -2600,9 +2639,9 @@ class Executor():
                 rpacket = tcpclient.sendpacket(packet)
                 if rpacket.ret != 0:
                     logger.log("ERROR", "UPDATE", f+" failed")
-                ret = ret + rpacket.ret
-            return 0    
-        
+        return 0    
+
+
     def replicate_spatial(self, outlist, task, e_recovery) :
         global logger
         global misc
@@ -2650,7 +2689,6 @@ class Executor():
                 rpacket = tcpclient.sendpacket(packet)
                 if rpacket.ret != 0:
                     logger.log("ERROR", "UPDATE", f+" failed")
-                ret = ret + rpacket.ret
         return 0
 
 if __name__ == '__main__':
@@ -2724,7 +2762,7 @@ if __name__ == '__main__':
     #start two worker threads to avoid the deadlock generated by concurrent collective operations and POSIX operations    
     workerl = []    
     for i in range(2):
-        tcpworker = TCPworker('TCPworker'+str(i))
+        tcpworker = TCPworker('TCPworker-'+str(i))
         while not tcpworker.is_alive():
             tcpworker.start()
         workerl.append(tcpworker)    
