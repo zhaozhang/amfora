@@ -412,6 +412,8 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         global localip
+        if path in self.recovery:
+            path = path+".bak"
         logger.log("INFO", "CREATE", path+", "+str(mode))
         self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
                                      st_size=0, st_ctime=time(), st_mtime=time(), 
@@ -426,15 +428,18 @@ class Amfora(LoggingMixIn, Operations):
         global misc
         global localip
         logger.log("INFO", "getattr", path)
-
         if path in self.recovery:
-            if path not in self.cdata:
-                self.cdata[path] = bytearray()
+            newpath = path+".bak"
+            if newpath in self.cmeta:
+                return self.cmeta[newpath]
+            else:
+                raise OSError(ENOENT, '')
+
 
         #flag, check exception here
         ips = misc.findserver(path)
         ip = ips[0]
-        logger.log("INFO", "getattr", "metadata of "+path+" is at "+ip)
+        logger.log("INFO", "getattr", "metadata of "+path+" host at "+ip)
         if path in self.meta:
             logger.log("INFO", "getattr", "metadata of "+path+" is self.meta ")
             return self.meta[path]
@@ -530,6 +535,8 @@ class Amfora(LoggingMixIn, Operations):
 
     def open(self, path, flags):
         global logger
+        if path in self.recovery:
+            path = path+".bak"
         logger.log("INFO", "open", path+", "+str(flags))
         self.fd += 1
         return self.fd
@@ -538,6 +545,8 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         global resilience_option
+        if path in self.recovery:
+            path = path+".bak"
         #logger.log("INFO", "READ", path+", "+str(size)+", "+str(offset))
 
         if path in self.data:
@@ -561,7 +570,8 @@ class Amfora(LoggingMixIn, Operations):
                         logger.log("ERROR", "READ", "file "+path+" is lost due to failure on "+ip)
                     elif resilience_option == 1 or resilience_option == 3:    
                         self.rerun(path)
-                        return bytes(self.cdata[path][offset:offset + size])
+                        newpath = path+".bak"
+                        return bytes(self.cdata[newpath][offset:offset + size])
                 else:
                     self.data[path] = rpacket.data[path]
                     return bytes(self.data[path][offset:offset + size])
@@ -573,9 +583,11 @@ class Amfora(LoggingMixIn, Operations):
         task = self.meta[path]['task']
         if len(path) > len(mountpoint) and path[:len(mountpoint)]==mountpoint:
             path = path[len(mountpoint):]
-        #print(path)
+        
         self.recovery[path] = 0
-        p = subprocess.Popen(task, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        newpath = path+".bak"
+        self.create(newpath, 33188)
+        p = subprocess.Popen(task, shell=True, cwd=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
         p.wait()
         stdout, stderr = p.communicate()
         print(stderr)
@@ -696,6 +708,8 @@ class Amfora(LoggingMixIn, Operations):
     def truncate(self, path, length, fh=None):
         global logger
         global misc
+        if path in self.recovery:
+            path = path+".bak"
         logger.log("INFO", "truncate", path+", "+str(length))
 
         #if path in self.cdata:
@@ -762,6 +776,8 @@ class Amfora(LoggingMixIn, Operations):
     def write(self, path, data, offset, fh):
         global logger
         global misc
+        if path in self.recovery:
+            path = path+".bak"
         #logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
         #write to the right place
         if path in self.cdata:
@@ -1074,7 +1090,8 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         logger.log("INFO", "local_updatemeta", path+" location: "+str(meta[path]['location']))
         if path not in self.meta:
-            return None
+            self.meta[path] = meta[path]
+            return 0
         else:
             if self.meta[path] == "":
                 self.meta[path] = meta[path]
@@ -2624,9 +2641,10 @@ class Executor():
 
             #insert task to metadata locally
             amfora.cmeta[f]['e_recovery'] = e_recovery
-            amfora.meta[f]['e_recovery'] = e_recovery
+            #amfora.meta[f]['e_recovery'] = e_recovery
             amfora.cmeta[f]['task'] = task
-            amfora.meta[f]['task'] = task
+            #amfora.meta[f]['task'] = task
+            amfora.meta[f] = amfora.cmeta[f]
 
             ret = 0    
             for ip in ips:
