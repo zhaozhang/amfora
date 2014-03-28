@@ -24,6 +24,7 @@ import zlib
 import math
 import re
 import random
+import shutil
 
 '''
 Amfora is a shared in-memory file system. Amfora is POSIX compatible.
@@ -58,6 +59,7 @@ class Amfora(LoggingMixIn, Operations):
         self.cdata = defaultdict(bytes)
         self.fd = 0
         self.recovery = {}
+        self.stale = {}
         #initializing the root directory
         now = time()
         self.meta['/'] = dict(st_mode=(S_IFDIR | 0o755), st_ctime=now,
@@ -412,13 +414,12 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         global localip
-        if path in self.recovery:
-            path = path+".bak"
+        #if path in self.recovery:
+        #    path = path+".bak"
         logger.log("INFO", "CREATE", path+", "+str(mode))
         self.cmeta[path] =  dict(st_mode=(S_IFREG | mode), st_nlink=1,
                                      st_size=0, st_ctime=time(), st_mtime=time(), 
                                      st_atime=time(), location=[localip], key=misc.hash(path), task="", e_recovery=0.0)
-        #self.cdata[path]=b'' 
         self.cdata[path]=bytearray()
         self.fd += 1
         return self.fd
@@ -428,12 +429,11 @@ class Amfora(LoggingMixIn, Operations):
         global misc
         global localip
         logger.log("INFO", "getattr", path)
-        if path in self.recovery:
-            newpath = path+".bak"
-            if newpath in self.cmeta:
-                return self.cmeta[newpath]
-            else:
-                raise OSError(ENOENT, '')
+        #if path in self.recovery:
+        #    if path in self.cmeta:
+        #        return self.cmeta[path]
+        #    else:
+        #        raise OSError(ENOENT, '')
 
 
         #flag, check exception here
@@ -462,11 +462,13 @@ class Amfora(LoggingMixIn, Operations):
                     if ret.ret == 256:
                         continue
                     if not ret.meta:
-                        raise OSError(ENOENT, '')
+                        continue
+                        #raise OSError(ENOENT, '')
                     else:
                         self.meta[path]=ret.meta[path]
                         return self.meta[path]
-
+            raise OSError(ENOENT, '')
+       
     def getxattr(self, path, name, position=0):
         global logger
         logger.log("INFO", "getxattr", path+", "+name)
@@ -535,8 +537,8 @@ class Amfora(LoggingMixIn, Operations):
 
     def open(self, path, flags):
         global logger
-        if path in self.recovery:
-            path = path+".bak"
+        #if path in self.recovery:
+        #    path = path+".bak"
         logger.log("INFO", "open", path+", "+str(flags))
         self.fd += 1
         return self.fd
@@ -545,9 +547,9 @@ class Amfora(LoggingMixIn, Operations):
         global logger
         global misc
         global resilience_option
-        if path in self.recovery:
-            path = path+".bak"
-        #logger.log("INFO", "READ", path+", "+str(size)+", "+str(offset))
+        #if path in self.recovery:
+        #    path = path+".bak"
+        logger.log("INFO", "READ", path+", "+str(size)+", "+str(offset))
 
         if path in self.data:
             return bytes(self.data[path][offset:offset + size])
@@ -568,10 +570,11 @@ class Amfora(LoggingMixIn, Operations):
                         continue
                     elif resilience_option == 0:
                         logger.log("ERROR", "READ", "file "+path+" is lost due to failure on "+ip)
-                    elif resilience_option == 1 or resilience_option == 3:    
+                    elif resilience_option == 1 or resilience_option == 3:
                         self.rerun(path)
-                        newpath = path+".bak"
-                        return bytes(self.cdata[newpath][offset:offset + size])
+                        #newpath = path+".bak"
+                        #return bytes(self.cdata[newpath][offset:offset + size])
+                        return bytes(self.cdata[path][offset:offset + size])
                 else:
                     self.data[path] = rpacket.data[path]
                     return bytes(self.data[path][offset:offset + size])
@@ -585,12 +588,49 @@ class Amfora(LoggingMixIn, Operations):
             path = path[len(mountpoint):]
         
         self.recovery[path] = 0
-        newpath = path+".bak"
-        self.create(newpath, 33188)
-        p = subprocess.Popen(task, shell=True, cwd=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
-        p.wait()
-        stdout, stderr = p.communicate()
-        print(stderr)
+        #newpath = path+".bak"
+        #self.cmeta[path] =  dict(st_mode=(S_IFREG | 33188), st_nlink=1,
+        #                             st_size=0, st_ctime=time(), st_mtime=time(), 
+        #                             st_atime=time(), location=[localip], key=misc.hash(path), task="", e_recovery=0.0)
+        #self.cdata[newpath]=bytearray()
+
+        recover_dir = "/dev/shm/scratch"
+        recover_file = recover_dir+path
+        print("********"+recover_file+"********")
+        if not os.path.isfile(recover_file):
+            os.makedirs(recover_dir, exist_ok=True)
+            new_task=""
+            words = task.split()
+            new_task = words[0]
+            for word in words[1:]:
+                if os.path.isfile(word):
+                    if len(word) > len(mountpoint) and word[:len(mountpoint)] == mountpoint:
+                        in_word = word[len(mountpoint)+1:] 
+
+                        dirname = os.path.dirname(in_word)
+                        filename = os.path.basename(in_word)
+                        if dirname != "":
+                            os.makedirs(os.path.join(recover_dir, dirname), exist_ok=True)
+    
+                        if word[len(mountpoint):] not in self.recovery:   
+                            shutil.copy(word, os.path.join(recover_dir, dirname))
+                        else:
+                            recover_file=os.path.join(recover_dir, dirname)+"/"+filename
+                        new_task = new_task+" "+os.path.join(os.path.join(recover_dir, dirname), filename)
+                    else:
+                        new_task = new_task+" "+word
+                else:
+                    new_task = new_task+" "+word
+            print(new_task)        
+            p = subprocess.Popen(new_task, shell=True, cwd=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+            p.wait()
+            stdout, stderr = p.communicate()
+            print(stderr)
+
+        fd = open(recover_file, 'rb')
+        self.cdata[path] = fd.read()
+        fd.close()
+
         logger.log("INFO", "RERUN", "Recover finish "+path+" by running ("+self.meta[path]['task']+")")
 
     def readdir(self, path, fh):
@@ -708,8 +748,8 @@ class Amfora(LoggingMixIn, Operations):
     def truncate(self, path, length, fh=None):
         global logger
         global misc
-        if path in self.recovery:
-            path = path+".bak"
+        #if path in self.recovery:
+        #    path = path+".bak"
         logger.log("INFO", "truncate", path+", "+str(length))
 
         #if path in self.cdata:
@@ -730,6 +770,10 @@ class Amfora(LoggingMixIn, Operations):
         global localip
         global misc
         logger.log("INFO", "UNLINK", path)
+        if path in self.recovery and path in self.meta:
+            self.stale[path] = self.meta.pop(path)
+        if path in self.cmeta:
+            self.cmeta.pop(path)
         '''
         #unlink is a two step procedure, first, we need to find the metadata of this file then remove the meta
         #second, clear the actual data 
@@ -776,9 +820,9 @@ class Amfora(LoggingMixIn, Operations):
     def write(self, path, data, offset, fh):
         global logger
         global misc
-        if path in self.recovery:
-            path = path+".bak"
-        #logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
+        #if path in self.recovery:
+        #    path = path+".bak"
+        logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
         #write to the right place
         if path in self.cdata:
             if offset == len(self.cdata[path]):
