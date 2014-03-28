@@ -597,6 +597,10 @@ class Amfora(LoggingMixIn, Operations):
         recover_dir = "/dev/shm/scratch"
         recover_file = recover_dir+path
         print("********"+recover_file+"********")
+        if os.path.isfile(recover_file):
+            statinfo = os.stat(recover_file)
+            if statinfo.st_size == 0:
+                os.remove(recover_file)
         if not os.path.isfile(recover_file):
             os.makedirs(recover_dir, exist_ok=True)
             new_task=""
@@ -875,8 +879,11 @@ class Amfora(LoggingMixIn, Operations):
 
         if path in self.cmeta and path not in self.meta:
             self.cmeta[path]['e_recovery'] = 1.0*self.cmeta[path]['st_size']/bandwidth
-            self.data[path] = self.cdata[path]
+            if path not in self.data:
+                self.data[path] = self.cdata[path]
             self.meta[path] = self.cmeta[path] 
+            while not path in self.data:
+                continue
             ret = 0
             for ip in ips:
                 if ip == localip:
@@ -1022,6 +1029,7 @@ class Amfora(LoggingMixIn, Operations):
             tempdict[path] = self.data[path]
             return tempdict
         else:
+            logger.log("ERROR", "local_read", path+" is not in self.data")
             return None
 
     def local_rename(self, old, new):
@@ -1179,8 +1187,8 @@ class TCPClient():
         global logger
         #logger.log("INFO", "TCPclient_init_port", "connecting to "+ip+":"+str(port))
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setblocking(True)
-        sock.settimeout(3.0)
+        #sock.setblocking(True)
+        #sock.settimeout(3.0)
         connected = 0
         while connected == 0:
             try:
@@ -2689,7 +2697,7 @@ class Executor():
             amfora.cmeta[f]['task'] = task
             #amfora.meta[f]['task'] = task
             amfora.meta[f] = amfora.cmeta[f]
-
+            amfora.data[f] = amfora.cdata[f]
             ret = 0    
             for ip in ips:
                 if ip == localip:
@@ -2735,6 +2743,7 @@ class Executor():
             amfora.cmeta[f]['task'] = task
             amfora.cmeta[f]['e_recovery'] = e_recovery
             amfora.meta[f] = amfora.cmeta[f]
+            amfora.data[f] = amfora.cdata[f]
 
             #update metadata remotely
 
