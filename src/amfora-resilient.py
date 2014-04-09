@@ -1351,7 +1351,10 @@ class TCPClient():
         #start an asynchronous server to receive acknowledgements of collective operations
         logger.log("INFO", "TCPClient_sendallpacket", "num_targets: "+str(olist))
         if len(olist) > 0:
-            server = self.init_server('', 55001)
+            if packet.op == "EXECUTE":
+                server = self.init_server('', 55005)
+            else:    
+                server = self.init_server('', 55001)
         else:
             server=None
         #rdict tracks the immediate children of this node
@@ -2071,7 +2074,7 @@ class TCPworker(threading.Thread):
                 if rpacket.ret != 0:
                     logger.log("ERROR", "EXECUTE", "Executing failed")
                 rpacket.tlist = [remoteip]    
-                tcpclient.one_sided_sendpacket(rpacket, 55001)    
+                tcpclient.one_sided_sendpacket(rpacket, 55005)    
                 conn.close()
             elif packet.op  == 'LOAD':
                 path = packet.path
@@ -2660,7 +2663,7 @@ class Executor():
                 self.replicate_spatial(outlist, task.desc, 0.0)
             elif resilience_option == 3:
                 global bandwidth
-
+                latency = 0.0006
                 total_data = 0
                 for f in inlist:
                     total_data = total_data + len(amfora.data[f])
@@ -2670,9 +2673,9 @@ class Executor():
                     t_tran = t_tran+1.0*len(amfora.data[inlist[i]])/bandwidth
                     expected_sum = expected_sum+amfora.meta[inlist[i]]['e_recovery']
                 expected_temporal = (task.endtime-task.starttime)+1.0*expected_sum/MTTF    
-                expected_spatial = 1.0*total_data/bandwidth
+                expected_spatial = latency+1.0*total_data/bandwidth
                 
-                print("expected_temporal: "+str(expected_temporal)+"    expected_spatial: "+str(expected_spatial))
+                print("file: "+str(outlist)+"  expected_temporal: "+str(expected_temporal)+"    expected_spatial: "+str(expected_spatial))
                 if expected_temporal > expected_spatial:
                     self.replicate_spatial(outlist, task.desc, expected_spatial)
                 elif expected_temporal <= expected_spatial:
