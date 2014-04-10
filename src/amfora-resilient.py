@@ -1040,7 +1040,12 @@ class Amfora(LoggingMixIn, Operations):
     def local_insert(self, path, data):
         global logger
         logger.log("INFO", "local_insert", path)
-        self.data[path] = data[path]
+        if path not in self.data:
+            #self.data[path] = data[path]
+            self.data[path] = data
+        else:
+            #self.data[path].extend(data[path])
+            self.data[path].extend(data)
         return 0
 
     def local_rmdir(self, path):
@@ -1751,8 +1756,9 @@ class TCPserver(threading.Thread):
             conn, addr = self.server.accept()
             try:
                 data = conn.recv(self.psize)
-                length = int(data.decode('utf8').strip('\0'))
-                #logger.log("INFO", "TCPServer.run()", "ready to receive "+str(length)+" bytes")
+                slength = str(data.decode('utf8').strip('\0'))
+                logger.log("INFO", "TCPServer.run()", "ready to receive "+slength+" bytes")
+                length = int(slength)
                 conn.send(bytes('0', 'utf-8'))
                 rect = 0
                 bpacket = b''
@@ -2665,17 +2671,20 @@ class Executor():
                 global bandwidth
                 latency = 0.0006
                 total_data = 0
-                for f in inlist:
-                    total_data = total_data + len(amfora.data[f])
+                #for f in inlist:
+                #    total_data = total_data + len(amfora.data[f])
                 expected_sum = 0.0
                 t_tran = 0.0
                 for i in range(len(inlist)):
-                    t_tran = t_tran+1.0*len(amfora.data[inlist[i]])/bandwidth
+                    #t_tran = t_tran+1.0*len(amfora.data[inlist[i]])/bandwidth
                     expected_sum = expected_sum+amfora.meta[inlist[i]]['e_recovery']
                 expected_temporal = (task.endtime-task.starttime)+1.0*expected_sum/MTTF    
+
+                for f in outlist:
+                    total_data = total_data + len(amfora.cdata[f])
                 expected_spatial = latency+1.0*total_data/bandwidth
                 
-                print("file: "+str(outlist)+"  expected_temporal: "+str(expected_temporal)+"    expected_spatial: "+str(expected_spatial))
+                logger.log('INFO', 'Executor_run', "file: "+str(outlist)+"  expected_temporal: "+str(expected_temporal)+"    expected_spatial: "+str(expected_spatial))
                 if expected_temporal > expected_spatial:
                     self.replicate_spatial(outlist, task.desc, expected_spatial)
                 elif expected_temporal <= expected_spatial:
@@ -2721,6 +2730,7 @@ class Executor():
         global localip
         global amfora
         logger.log("INFO", "replicate_spatial", "replicate_spatial: "+str(outlist)+" "+task)
+        chunk_size = 64000000
 
         for f in outlist:
             suc_ip = []
@@ -2732,10 +2742,32 @@ class Executor():
                 if ip == localip:
                     continue
                 tempdict = dict()
-                tempdict[f] = amfora.cdata[f]
-                packet = Packet(f, "INSERTDATA", None, tempdict, None, [ip], None)
-                tcpclient = TCPClient()
-                rpacket = tcpclient.sendpacket(packet)
+                total_size = len(amfora.cdata[f])
+                logger.log("INFO", "replicate_spatial", f+" size is: "+str(total_size))    
+                sent_size = 0
+                rpacket = None
+                if total_size > chunk_size:
+                    while sent_size < total_size:
+                        if total_size - sent_size > chunk_size:
+                            #tempdict[f] = amfora.cdata[f][sent_size:sent_size+chunk_size]
+                            data = amfora.cdata[f][sent_size:sent_size+chunk_size]
+                            sent_size = sent_size+chunk_size
+                        else:
+                            #tempdict[f] = amfora.cdata[f][sent_size:]
+                            data = amfora.cdata[f][sent_size:]
+                            #sent_size = sent_size+len(tempdict[f])
+                            sent_size = sent_size+len(data)
+                        #packet = Packet(f, "INSERTDATA", None, tempdict, None, [ip], None)
+                        packet = Packet(f, "INSERTDATA", None, data, None, [ip], None)
+                        tcpclient = TCPClient()
+                        rpacket = tcpclient.sendpacket(packet)
+                else:
+                    #tempdict[f] = amfora.cdata[f]
+                    data = amfora.cdata[f]
+                    #packet = Packet(f, "INSERTDATA", None, tempdict, None, [ip], None)
+                    packet = Packet(f, "INSERTDATA", None, data, None, [ip], None)
+                    tcpclient = TCPClient()
+                    rpacket = tcpclient.sendpacket(packet)
                 if rpacket.ret != 0:
                     logger.log("ERROR", "INSERTDATA", f+" failed")
                 else:
