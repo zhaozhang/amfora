@@ -549,7 +549,7 @@ class Amfora(LoggingMixIn, Operations):
         global resilience_option
         #if path in self.recovery:
         #    path = path+".bak"
-        logger.log("INFO", "READ", path+", "+str(size)+", "+str(offset))
+        #logger.log("INFO", "READ", path+", "+str(size)+", "+str(offset))
 
         if path in self.data:
             return bytes(self.data[path][offset:offset + size])
@@ -826,7 +826,7 @@ class Amfora(LoggingMixIn, Operations):
         global misc
         #if path in self.recovery:
         #    path = path+".bak"
-        logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
+        #logger.log("INFO", "write", path+", length: "+str(len(data))+", offset: "+str(offset))
         #write to the right place
         if path in self.cdata:
             if offset == len(self.cdata[path]):
@@ -2266,20 +2266,20 @@ class Misc():
         vlist = list(slist)
         vlist.remove(localip)
         #comment the following code to disable SEQ algorith
-        #while len(vlist) > 0:
-        #    temp = []
-        #    ip = vlist.pop()
-        #    temp.append(ip)
-        #    tlist.append(temp)    
-        #return tlist
-        #uncomment the following code to enable MST algorithm
         while len(vlist) > 0:
             temp = []
-            for i in range(math.ceil(len(vlist)/2)):
-                ip = vlist.pop()
-                temp.append(ip)
+            ip = vlist.pop()
+            temp.append(ip)
             tlist.append(temp)    
         return tlist
+        #uncomment the following code to enable MST algorithm
+        #while len(vlist) > 0:
+        #    temp = []
+        #    for i in range(math.ceil(len(vlist)/2)):
+        #        ip = vlist.pop()
+        #        temp.append(ip)
+        #    tlist.append(temp)    
+        #return tlist
     
     def nextip(self):
         global localip
@@ -2681,6 +2681,7 @@ class Executor():
                 expected_temporal = (task.endtime-task.starttime)+1.0*expected_sum/MTTF    
 
                 for f in outlist:
+                    logger.log('INFO', 'FILE_META', "file: "+f+", running time: "+str(task.endtime-task.starttime)+", size: "+str(len(amfora.cdata[f]))+", expected_input: "+str(expected_sum))
                     total_data = total_data + len(amfora.cdata[f])
                 expected_spatial = latency+1.0*total_data/bandwidth
                 
@@ -2803,7 +2804,7 @@ if __name__ == '__main__':
         exit(1)
         
     global logger
-    logger = Logger("/tmp/amfora-fuse.log")
+    logger = Logger("/tmp/amfora.log")
     global mountpoint
     mountpoint = argv[1]
     global localip
