@@ -382,6 +382,48 @@ class Amfora(LoggingMixIn, Operations):
             logger.log("INFO", "EXECUTE", "execution finished "+str(rpacket.meta))
             return rpacket
 
+    def run(self):
+        global logger
+        global slist
+        global mountpoint
+        global misc
+        global master
+        
+        logger.log("INFO", "RUN", "execute all tasks")
+        taskl = misc.readtask()
+        print("ready to execute "+str(len(taskl))+" tasks")
+        master.feed_task(taskl)
+
+        while True:
+            sleep(1)
+            print(str(len(master.smap)+len(master.emap))+"    "+str(len(taskl)))
+            if len(master.smap)+len(master.emap) == len(taskl):
+                break
+
+        packet=Packet("", "RUN", master.smap, master.emap, 0, None, None)
+        return packet
+        '''
+        rpacket = tcpclient.sendallpacket(packet)
+        if len(rpacket.misc) > 0:
+            print("execution failed on "+str(rpacket.tlist))
+            print("there are "+str(len(rpacket.misc))+" tasks remaining")
+            print("rerun the failed tasks on "+str(slist))
+            tlist = list(slist)
+            for ip in rpacket.tlist:
+                tlist.remove(ip)
+            packet = Packet("", "EXECUTE", {}, {}, 0, tlist, rpacket.misc)
+            rrpacket = tcpclient.sendallpacket(packet) 
+            rpacket.meta.update(rrpacket.meta)
+            rpacket.data.update(rrpacket.data)
+            logger.log("INFO", "EXECUTE", "second round execution finished "+str(rrpacket.meta))
+        if sum(rpacket.meta.values()) != 0:
+            logger.log("ERROR", "EXECUTE", "execution failed "+str(rpacket.meta)+"\n"+str(rpacket.data))
+            return rpacket
+        else:
+            logger.log("INFO", "EXECUTE", "execution finished "+str(rpacket.meta))
+            return rpacket
+        '''
+
 
     '''
     below are POSIX interface
@@ -2216,6 +2258,10 @@ class Interfaceserver(threading.Thread):
                 ret = amfora.execute()
                 self.sendpacket(conn, ret)
                 conn.close()
+            elif el[1] == 'RUN':
+                ret = amfora.run()
+                self.sendpacket(conn, ret)
+                conn.close()
             elif el[1] == 'STATE':
                 ret = executor.state()
                 self.sendpacket(conn, ret)
@@ -2589,12 +2635,14 @@ class Packet():
 
 class Task():
     def __init__(self, desc):
+        global localip
         self.queuetime = time()
         self.starttime = None
         self.endtime = None
         self.desc = desc
         self.ret = None
-        tempkey = self.desc+str(self.queuetime)
+        randomkey = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(6))
+        tempkey = self.desc+str(self.queuetime)+randomkey
         self.key = zlib.adler32(bytes(tempkey, 'utf8')) & 0xffffffff
 
         
@@ -2798,6 +2846,265 @@ class Executor():
                     logger.log("ERROR", "UPDATE", f+" failed")
         return 0
 
+class Master(threading.Thread):
+    def __init__(self, workerid, port):
+        threading.Thread.__init__(self)
+        self.id = workerid
+        self.host = ''
+        self.port = port #55007
+        self.psize = 16
+        self.bufsize = 1048576
+        self.server = None
+        self.socket_queue = queue.Queue()
+        self.task_queue = queue.Queue()
+        self.ip_sock_map = dict()
+        self.smap = dict()
+        self.emap = dict()
+
+    def open_socket(self):
+        global logger
+        try:
+            logger.log("INFO", "Master_opensocket", "Open server socket")
+            self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server.bind((self.host, self.port))
+            self.server.listen(5)
+        except socket.error as msg:
+            logger.log("ERROR", "Master_opensocket", msg)
+            self.server = None
+
+    def sendpacket(self, sock, packet):
+        logger.log("INFO", "Master_sendpacket()", "sending packet to "+str(packet.tlist))
+        try:
+            bpacket = pickle.dumps(packet)
+
+            length = len(bpacket)
+
+            slength = str(length)
+            while len(slength) < self.psize:
+                slength = slength + '\0'
+
+            sock.send(bytes(slength, 'utf-8'))
+            sock.recv(1)
+            
+            #send the bpacket data
+            sent = 0
+            while sent < length:
+                if length - sent > self.bufsize:
+                    sent_iter = sock.send(bpacket[sent:sent+self.bufsize])
+                else:
+                    sent_iter = sock.send(bpacket[sent:])
+                sent = sent + sent_iter
+        except socket.error as msg:
+            logger.log("ERROR", "Master__sendpacket()", "Socket Exception: "+str(msg))
+        except Exception as msg:
+            logger.log("ERROR", "Master_sendpacket()", "Other Exception: "+str(msg))
+        finally:
+            return sent
+
+    def feed_task(self, input_task_list):
+        logger.log("INFO", "Master_feed-task()", "feeding "+str(len(input_task_list))+" tasks")
+        self.reset()
+        for task in input_task_list:
+            self.task_queue.put(task, True, None)
+
+    def reset(self):
+        self.smap.clear()
+        self.emap.clear()
+
+    def run(self):
+        global logger
+        global amfora
+        #global executor
+        global slist
+        self.open_socket()
+        
+        while True:
+            try:
+                conn, addr = self.server.accept()
+                self.socket_queue.put(conn, True, None)
+                self.ip_sock_map[addr[0]] = conn
+                if self.socket_queue.qsize() == len(slist):
+                    logger.log("INFO", "Master_run", "master now has "+str(self.socket_queue.qsize())+" slaves")
+                    break
+            except socket.error:
+                logger.log("ERROR", "Master_run", "socket exception when accepting connection: "+str(socket.error))
+                break
+        while True:
+            task = self.task_queue.get(True, None)
+            sock = self.socket_queue.get(True, None)
+            peer = sock.getpeername()[0]
+            packet = Packet('/', "TASK", {}, {}, 0, [peer], task)
+            self.sendpacket(sock, packet)
+
+
+class Master_receiver(threading.Thread):
+    def __init__(self, workerid, port):
+        threading.Thread.__init__(self)
+        self.id = workerid
+        self.host = ''
+        self.port = port #55008
+        self.psize = 16
+        self.bufsize = 1048576
+        self.server = None
+        self.socket_queue = queue.Queue()
+        self.task_queue = queue.Queue()
+        self.ip_sock_map = dict()
+
+    def open_socket(self):
+        global logger
+        try:
+            logger.log("INFO", "Master_receiver_opensocket", "Open server socket")
+            self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server.bind((self.host, self.port))
+            self.server.listen(5)
+        except socket.error as msg:
+            logger.log("ERROR", "Master_opensocket", msg)
+            self.server = None
+
+    def recvpacket(self, s):
+        logger.log("INFO", "Master_recvpacket()", "receiving a packet from "+str(s.getpeername()[0]))
+        try:
+            #receive the size of the returned packet
+            data = s.recv(self.psize)
+            length = int(data.decode('utf8').strip('\0'))
+            s.send(bytes('0', 'utf8'))
+            data = b''
+            rect = 0
+            while rect < length:
+                if length - rect > self.bufsize:
+                    temp = s.recv(self.bufsize)
+                else:
+                    temp = s.recv(length-rect)
+                rect = rect + len(temp)
+                data = data + temp
+            s.close()
+            packet = pickle.loads(data)
+
+        except socket.error as msg:
+            logger.log("ERROR", "Master_recvpacket()", "Socket Exception: "+str(msg))
+        except Exception as msg:
+            logger.log("ERROR", "Master_recvpacket()", "Other Exception: "+str(msg))
+        finally:
+            return packet
+
+    def run(self):
+        global logger
+        global amfora
+        global master
+        global slist
+        self.open_socket()
+        
+        while True:
+            try:
+                conn, addr = self.server.accept()
+                packet = self.recvpacket(conn)
+                print(str(packet.meta))
+                print(str(packet.data))
+                master.smap.update(packet.meta)
+                master.emap.update(packet.data)
+                master.socket_queue.put(master.ip_sock_map[addr[0]], True, None)
+            except socket.error:
+                logger.log("ERROR", "Master_run", "socket exception when accepting connection: "+str(socket.error))
+                break
+
+class Slave(threading.Thread):
+    def __init__(self, workerid, iport, oport):
+        threading.Thread.__init__(self)
+        self.id = workerid
+        self.host = ''
+        self.iport = iport
+        self.oport = oport
+        self.psize = 16
+        self.bufsize = 1048576
+
+    def init_port(self, ip, port):
+        global logger
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        connected = 0
+        while connected == 0:
+            try:
+                sock.connect((ip, port))
+            except Exception:
+                logger.log("ERROR", "Slave_init_port", "connect "+ip+" failed")
+                return None
+            else:
+                connected = 1
+        return sock
+
+    def recvpacket(self, s):
+        logger.log("INFO", "Slave_recvpacket()", "receiving a packet from "+str(s.getpeername()[0]))
+        try:
+            #receive the size of the returned packet
+            data = s.recv(self.psize)
+            length = int(data.decode('utf8').strip('\0'))
+            s.send(bytes('0', 'utf8'))
+            data = b''
+            rect = 0
+            while rect < length:
+                if length - rect > self.bufsize:
+                    temp = s.recv(self.bufsize)
+                else:
+                    temp = s.recv(length-rect)
+                rect = rect + len(temp)
+                data = data + temp
+            #s.close()
+            packet = pickle.loads(data)
+
+        except socket.error as msg:
+            logger.log("ERROR", "Slave__recvpacket()", "Socket Exception: "+str(msg))
+        except Exception as msg:
+            logger.log("ERROR", "Slave_recvpacket()", "Other Exception: "+str(msg))
+        finally:
+            return packet
+
+    def sendpacket(self, sock, packet):
+        logger.log("INFO", "Slave_sendpacket()", "sending packet to "+str(packet.tlist))
+        try:
+            bpacket = pickle.dumps(packet)
+
+            length = len(bpacket)
+
+            slength = str(length)
+            while len(slength) < self.psize:
+                slength = slength + '\0'
+
+            sock.send(bytes(slength, 'utf-8'))
+            sock.recv(1)
+            
+            #send the bpacket data
+            sent = 0
+            while sent < length:
+                if length - sent > self.bufsize:
+                    sent_iter = sock.send(bpacket[sent:sent+self.bufsize])
+                else:
+                    sent_iter = sock.send(bpacket[sent:])
+                sent = sent + sent_iter
+                #logger.log("INFO", "Interfaceserver_sendpacket()", "send "+str(sent_iter)+" bytes")
+            #logger.log("INFO", "Interfaceserver_sendpacket()", "totally send "+str(sent)+" bytes")    
+        except socket.error as msg:
+            logger.log("ERROR", "Slave_sendpacket()", "Socket Exception: "+str(msg))
+        except Exception as msg:
+            logger.log("ERROR", "Slave_sendpacket()", "Other Exception: "+str(msg))
+        finally:
+            return sent
+
+    def run(self):
+        global logger
+        global slist
+        master_ip = slist[0]
+        isock = self.init_port(master_ip, self.iport)
+        while True:
+            packet = self.recvpacket(isock)
+            task = packet.misc
+            executor = Executor([task])
+            executor.run()
+            rpacket = Packet("", "TASK", executor.smap, executor.emap, 0, [master_ip], None)
+            osock = self.init_port(master_ip, self.oport)
+            self.sendpacket(osock, rpacket)
+
+
 if __name__ == '__main__':
     if len(argv) != 8:
         print(('usage: %s <mountpoint> <amfs.conf> <localip> <replication_factor> <MTTF> <resilience_option> <bandwidth>' % argv[0]))
@@ -2878,6 +3185,21 @@ if __name__ == '__main__':
     while not interfaceserver.is_alive():
         interfaceserver.start()
 
+    #The three threads below are a master-slave scheduler to try out the FIFO scheduling policy  
+    if localip == slist[0]:    
+        global master
+        master = Master("master", 55007)
+        while not master.is_alive():
+            master.start()
 
+        master_receiver = Master_receiver("master_receiver", 55008)    
+        while not master_receiver.is_alive():
+            master_receiver.start()
+
+    sleep(5)        
+    slave = Slave("slave", 55007, 55008)
+    while not slave.is_alive():
+        slave.start()
+        
     fuse = FUSE(amfora, mountpoint, foreground=True, nothreads=False, big_writes=True, direct_io=True)
     

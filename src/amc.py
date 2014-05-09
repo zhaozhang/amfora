@@ -130,6 +130,9 @@ class AMFSclient():
     def execute(self):
         ret = self.tcpclient.sendmsg("/", "EXECUTE")
         return ret
+    def run(self):
+        ret = self.tcpclient.sendmsg("/", "RUN")
+        return ret
     def state(self):
         ret = self.tcpclient.sendmsg("/", "STATE")
         return ret
@@ -210,7 +213,7 @@ if __name__ == '__main__':
         if ret.ret == 0:
             logger.log("INFO", "main", "shuffle "+src+" to "+dst+" succeeded in "+str(end-start)+" seconds")
         else:
-            print(op+" "+path+" failed")
+            print(op+" "+src+" "+dst+" failed")
             logger.log("ERROR", "main", "shuffle "+src+" to "+dst+" failed")
             sys.exit(1)
     elif op == "queue":
@@ -229,6 +232,9 @@ if __name__ == '__main__':
             sys.exit(1)
     elif op == "execute":
         logger.log("INFO", "main", "execute")
+        if not os.path.exists("/tmp/amfora-task.txt"):
+            print("ERROR: task description does not exist")
+            sys.exit(1)
         start = time()
         ret = client.execute()
         end  = time()
@@ -299,7 +305,28 @@ if __name__ == '__main__':
             print(op+" "+src+" failed")
             logger.log("ERROR", "main", "typedef failed")
             sys.exit(1)
-
+    elif op == "run":
+        logger.log("INFO", "main", "run")
+        if not os.path.exists("/tmp/amfora-task.txt"):
+            print("ERROR: task description does not exist")
+            sys.exit(1)
+        start = time()
+        ret = client.run()
+        end  = time()        
+        if sum(ret.meta.values()) == 0:
+            print("total: "+str(len(ret.meta)+len(ret.data))+"   suced: "+str(len(ret.meta))+"   failed: "+str(len(ret.data))+" in "+str(end-start)+" seconds")
+            logger.log("INFO", "main", "run succeeded in "+str(end-start)+" seconds")
+            stamp=strftime("%Y-%m-%d-%H:%M:%S", gmtime())
+            shutil.move('/tmp/amfora-task.txt', './amfora-task.txt.'+stamp+'.succeeded')
+        else:
+            print(op+" failed")
+            for task in ret.meta:
+                if ret.meta[task] != 0:
+                    print("Task: "+task+"\nStderr: "+ret.data[task].decode('utf8'))
+            logger.log("ERROR", "main", "run failed")
+            stamp=strftime("%Y-%m-%d-%H:%M:%S", gmtime())
+            shutil.move('/tmp/amfora-task.txt', './amfora-task.txt.'+stamp+'.failed')
+            sys.exit(1)
     else:
         logger.log("ERROR", "main", "operation: "+op+" not supported")
         sys.exit(1)
