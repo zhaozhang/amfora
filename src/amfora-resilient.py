@@ -2717,26 +2717,29 @@ class Executor():
                 self.replicate_spatial(outlist, task.desc, 0.0)
             elif resilience_option == 3:
                 global bandwidth
-                latency = 0.0006
+                global latency
+                global replication_factor
                 total_data = 0
                 #for f in inlist:
                 #    total_data = total_data + len(amfora.data[f])
                 expected_sum = 0.0
                 t_tran = 0.0
                 for i in range(len(inlist)):
-                    #t_tran = t_tran+1.0*len(amfora.data[inlist[i]])/bandwidth
                     expected_sum = expected_sum+amfora.meta[inlist[i]]['e_recovery']
                 expected_temporal = (task.endtime-task.starttime)+1.0*expected_sum/MTTF    
+                score_temporal = latency*(replication_factor-1)+expected_temporal
 
                 for f in outlist:
                     logger.log('INFO', 'FILE_META', "file: "+f+", running time: "+str(task.endtime-task.starttime)+", size: "+str(len(amfora.cdata[f]))+", expected_input: "+str(expected_sum))
                     total_data = total_data + len(amfora.cdata[f])
-                expected_spatial = latency+1.0*total_data/bandwidth
-                
+                expected_spatial = latency+1.0*total_data/bandwidth+1.0*latency/MTTF
+                score_spatial = (replication_factor-1)*(latency+1.0*total_data/bandwidth)+expected_spatial
+
                 logger.log('INFO', 'Executor_run', "file: "+str(outlist)+"  expected_temporal: "+str(expected_temporal)+"    expected_spatial: "+str(expected_spatial))
-                if expected_temporal > expected_spatial:
+                logger.log('INFO', 'Executor_run', "file: "+str(outlist)+"  score_temporal: "+str(score_temporal)+"    score_spatial: "+str(score_spatial))
+                if score_temporal > score_spatial:
                     self.replicate_spatial(outlist, task.desc, expected_spatial)
-                elif expected_temporal <= expected_spatial:
+                elif score_temporal <= score_spatial:
                     self.replicate_temporal(outlist, task.desc, expected_temporal)
             logger.log('INFO', 'Executor_run end', '----------------------------------')        
         logger.log('INFO', 'Executor_run', 'all tasks finished')
@@ -3106,8 +3109,8 @@ class Slave(threading.Thread):
 
 
 if __name__ == '__main__':
-    if len(argv) != 8:
-        print(('usage: %s <mountpoint> <amfs.conf> <localip> <replication_factor> <MTTF> <resilience_option> <bandwidth>' % argv[0]))
+    if len(argv) != 9:
+        print(('usage: %s <mountpoint> <amfs.conf> <localip> <replication_factor> <MTTF> <resilience_option> <bandwidth> <latency>' % argv[0]))
         exit(1)
         
     global logger
@@ -3132,8 +3135,10 @@ if __name__ == '__main__':
 
     global bandwidth
     bandwidth = int(argv[7])
+    global latency
+    latency = float(argv[8])
 
-    logger.log("INFO", "main", "resilient feature: replication_factor: "+str(replication_factor)+"  MTTF: "+str(MTTF)+" Resilience_option: "+str(resilience_option)+" Bandwidth: "+str(bandwidth)+"B/s")
+    logger.log("INFO", "main", "resilient feature: replication_factor: "+str(replication_factor)+"  MTTF: "+str(MTTF)+" Resilience_option: "+str(resilience_option)+" Bandwidth: "+str(bandwidth)+"B/s"+" Latency: "+str(latency)+"s")
 
     global parentip
     parentip = ''
